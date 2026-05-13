@@ -2,6 +2,16 @@
 
 אוטומציה שלוקחת הקלטות פגישות זום של עובדות, מתמללת, מסכמת בעברית, ומצרפת Note לאיש הקשר המתאים ב-GoHighLevel.
 
+## מסמכים
+
+| למי | מסמך |
+|---|---|
+| **עובדות** (אורנית, רות) | [docs/EMPLOYEE_README.md](docs/EMPLOYEE_README.md) — איך להתקין, להגדיר, ופתרון תקלות |
+| **אדמין** (גד) | [docs/ADMIN.md](docs/ADMIN.md) — תפעול: הוספת עובדת, רוטציה, לוגים, עלויות |
+| **לפני שחרור** | [docs/TEST_PLAN.md](docs/TEST_PLAN.md) — צ'קליסט בדיקה מקצה לקצה |
+| Server dev | [server/README.md](server/README.md) — הרצה מקומית + deploy ל-Render |
+| Uploader dev | [uploader/README.md](uploader/README.md) — CLI, GUI, בנייה ל-macOS / Windows |
+
 ## מבנה הפרויקט
 
 ```
@@ -28,10 +38,10 @@
 | 4. Summarization (Claude opus-4-5) | ✅ |
 | 5. GHL contact matching + Note creation | ✅ |
 | 6. Render deploy (Blueprint) | ✅ קבצים מוכנים, ממתין ל-push + deploy |
-| 7. Uploader CLI | ⏳ |
-| 8. Uploader GUI tray | ⏳ |
-| 9. macOS .dmg + Windows .exe | ⏳ |
-| 10. README לעובדות + test plan | ⏳ |
+| 7. Uploader CLI | ✅ |
+| 8. Uploader GUI tray | ✅ |
+| 9. macOS .dmg | ✅ (Windows .exe צריך לבנות על Windows machine) |
+| 10. README לעובדות + admin + test plan | ✅ |
 
 ## Quickstart לפיתוח מקומי
 
