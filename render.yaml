@@ -1,0 +1,63 @@
+databases:
+  - name: zoom-ghl-db
+    plan: free
+    databaseName: zoom_ghl
+    user: zoom_ghl
+    region: frankfurt
+
+services:
+  - type: redis
+    name: zoom-ghl-redis
+    plan: free
+    region: frankfurt
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+  - type: web
+    name: zoom-ghl-server
+    runtime: docker
+    plan: starter
+    region: frankfurt
+    rootDir: server
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: zoom-ghl-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: zoom-ghl-redis
+          property: connectionString
+      - key: ENVIRONMENT
+        value: production
+      - key: LOG_LEVEL
+        value: INFO
+      - key: ANTHROPIC_MODEL
+        value: claude-opus-4-5
+      - key: GHL_API_BASE
+        value: https://services.leadconnectorhq.com
+      - key: GHL_API_VERSION
+        value: "2021-07-28"
+      - key: ADMIN_EMAIL
+        value: gad@morethan.com
+      - key: MAX_UPLOAD_MB
+        value: "500"
+      - key: TRANSCRIPT_CHUNK_MINUTES
+        value: "10"
+      - key: UPLOAD_DIR
+        value: /tmp/zoom-ghl-uploads
+      # Secrets — set manually in Render dashboard (sync: false keeps them out of the blueprint)
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GHL_PRIVATE_TOKEN
+        sync: false
+      - key: GHL_LOCATION_ID
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
