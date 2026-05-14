@@ -67,6 +67,22 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
+    def get_contact_appointments(self, contact_id: str) -> list[dict[str, Any]]:
+        """Return all appointments (calendar events) attached to this contact."""
+        r = self._client.get(f"/contacts/{contact_id}/appointments/")
+        if r.status_code == 404:
+            return []
+        if r.status_code != 200:
+            raise GHLError(f"get_contact_appointments {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        return data.get("events", data.get("appointments", []))
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
     def create_note(self, contact_id: str, body: str, user_id: str | None = None) -> dict[str, Any]:
         """Attach a note to a contact. Returns the created note object."""
         payload: dict[str, Any] = {"body": body}
