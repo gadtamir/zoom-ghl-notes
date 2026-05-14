@@ -1,0 +1,95 @@
+name: Build uploader
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'uploader/**'
+      - '.github/workflows/build-uploader.yml'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build deps
+        working-directory: uploader
+        run: |
+          python -m venv .venv
+          source .venv/bin/activate
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Render icons
+        working-directory: uploader
+        run: |
+          source .venv/bin/activate
+          python build_icon.py
+
+      - name: PyInstaller build
+        working-directory: uploader
+        run: |
+          source .venv/bin/activate
+          pyinstaller zghl.spec --noconfirm --clean
+
+      - name: Make .dmg
+        working-directory: uploader
+        run: |
+          if [ ! -d "dist/ZoomGHL.app" ]; then
+            echo "::error::ZoomGHL.app not produced"
+            exit 1
+          fi
+          hdiutil create -volname ZoomGHL -srcfolder dist/ZoomGHL.app -ov -format UDZO dist/ZoomGHL.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZoomGHL-macos
+          path: uploader/dist/ZoomGHL.dmg
+          if-no-files-found: error
+
+  build-windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install build deps
+        working-directory: uploader
+        shell: cmd
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-build.txt
+
+      - name: Render icons
+        working-directory: uploader
+        shell: cmd
+        run: |
+          python build_icon.py
+
+      - name: PyInstaller build
+        working-directory: uploader
+        shell: cmd
+        run: |
+          pyinstaller zghl.spec --noconfirm --clean
+          if not exist "dist\ZoomGHL\ZoomGHL.exe" exit /b 1
+
+      - name: Zip distributable folder
+        working-directory: uploader
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\ZoomGHL\* -DestinationPath dist\ZoomGHL-windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ZoomGHL-windows
+          path: uploader/dist/ZoomGHL-windows.zip
+          if-no-files-found: error
