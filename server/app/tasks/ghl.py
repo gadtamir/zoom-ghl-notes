@@ -2,12 +2,16 @@
 
 Strategy:
   1. Build candidate search queries in priority order:
-     a. extracted_contact_name (from Claude)
-     b. parsed meeting_topic (with Zoom datetime prefix stripped)
+     a. parsed meeting_topic (folder name with Zoom datetime prefix stripped) — PRIMARY signal
+     b. extracted_contact_name (from Claude, transcript) — last-resort fallback only
   2. For each query, hit GHL contacts search.
      - If matches found: pick the most-recently-updated one and we're done.
      - If multiple matches: warn in log, still pick most-recent.
   3. If no candidate yielded a match → status=unmatched (summary kept; no note created).
+
+Planned next iteration: cross-check against GHL calendar appointments by
+(employee, meeting_datetime). When implemented, calendar will become priority 1
+and folder name becomes priority 2.
 """
 
 import logging
@@ -43,11 +47,13 @@ def _clean_topic(topic: str | None) -> str | None:
 
 def _candidate_queries(job: Job) -> list[str]:
     out: list[str] = []
-    if job.extracted_contact_name:
-        out.append(job.extracted_contact_name.strip())
     cleaned_topic = _clean_topic(job.meeting_topic)
-    if cleaned_topic and cleaned_topic not in out:
+    if cleaned_topic:
         out.append(cleaned_topic)
+    if job.extracted_contact_name:
+        name = job.extracted_contact_name.strip()
+        if name and name not in out:
+            out.append(name)
     return out
 
 
