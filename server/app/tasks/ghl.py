@@ -30,28 +30,55 @@ log = logging.getLogger(__name__)
 _ZOOM_DT_PREFIX = re.compile(
     r"^\s*\d{4}-\d{2}-\d{2}[\s_T]+\d{1,2}[.\:_]\d{2}([.\:_]\d{2})?\s*[-_]*\s*",
 )
+# Words that almost always appear in Zoom meeting topics but are not part of any
+# contact's name. We DROP these tokens (so "פגישה עם דני" → "דני").
 _GENERIC_WORDS = re.compile(
-    r"\b(שיחה|פגישה|פגישת|זום|זום_|טלפון|טלפונית|עם|עם_|של|recording|meeting|zoom|call|with)\b",
+    r"(?:^|\s)(שיחה|פגישה|פגישת|זום|טלפון|טלפונית|עם|של|התאמה|אפיון|recording|meeting|zoom|call|with)(?=\s|$)",
     re.IGNORECASE,
 )
+# Separators that split a Zoom topic into independent candidate segments.
+# "+" — almost always "and" between two parties
+# "_" — common filename separator
+# We intentionally exclude "-" because legitimate names contain it (e.g. "More-Than").
+_SEGMENT_SPLIT = re.compile(r"\s*[+_]\s*")
+# Strip parenthetical annotations from Claude-extracted names like "אביאור (שם משפחה לא צוין)".
+_PARENTHETICAL = re.compile(r"\s*\([^)]*\)")
 
 
-def _clean_topic(topic: str | None) -> str | None:
+def _clean_segment(seg: str) -> str:
+    """Apply generic-word removal and whitespace collapse to a single segment."""
+    cleaned = _GENERIC_WORDS.sub(" ", seg)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -")
+    return cleaned
+
+
+def _split_topic_into_candidates(topic: str | None) -> list[str]:
+    """Return ordered candidate names extracted from a Zoom meeting topic.
+
+    First strips the leading Zoom datetime, then splits on `+`/`_` separators
+    (each side is typically a separate party), then drops generic meeting
+    words from each segment. The first segment is usually the client name in
+    Zoom's "<client> + <employee> - <company>" pattern.
+    """
     if not topic:
-        return None
-    cleaned = _ZOOM_DT_PREFIX.sub("", topic)
-    cleaned = _GENERIC_WORDS.sub("", cleaned)
-    cleaned = re.sub(r"[\s_\-]+", " ", cleaned).strip()
-    return cleaned or None
+        return []
+    stripped = _ZOOM_DT_PREFIX.sub("", topic).strip()
+    if not stripped:
+        return []
+
+    candidates: list[str] = []
+    for seg in _SEGMENT_SPLIT.split(stripped):
+        cleaned = _clean_segment(seg)
+        if cleaned and len(cleaned) >= 2 and cleaned not in candidates:
+            candidates.append(cleaned)
+    return candidates
 
 
 def _candidate_queries(job: Job) -> list[str]:
     out: list[str] = []
-    cleaned_topic = _clean_topic(job.meeting_topic)
-    if cleaned_topic:
-        out.append(cleaned_topic)
+    out.extend(_split_topic_into_candidates(job.meeting_topic))
     if job.extracted_contact_name:
-        name = job.extracted_contact_name.strip()
+        name = _PARENTHETICAL.sub("", job.extracted_contact_name).strip()
         if name and name not in out:
             out.append(name)
     return out

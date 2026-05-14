@@ -130,5 +130,43 @@ def list_jobs(
         db.close()
 
 
+@app.command(help="Re-run only the GHL match+note stage on an already-summarized job.")
+def retry_match(id: str = typer.Option(..., "--id", help="Job id")) -> None:
+    from .tasks.ghl import attach_note
+    from .tasks.pipeline import _set_status  # noqa
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == id).first()
+        if not job:
+            console.print("[red]not found[/red]")
+            raise typer.Exit(code=1)
+        if not job.summary:
+            console.print(f"[red]job has no summary (status={job.status.value}) — re-upload required[/red]")
+            raise typer.Exit(code=1)
+
+        # Reset terminal state so attach_note can re-run cleanly.
+        job.error_message = None
+        job.completed_at = None
+        job.ghl_contact_id = None
+        job.ghl_note_id = None
+        job.status = JobStatus.summarized
+        db.commit()
+
+        try:
+            result = attach_note(db, job)
+        except Exception as exc:
+            console.print(f"[red]attach_note error:[/red] {exc}")
+            raise typer.Exit(code=1)
+
+        db.refresh(job)
+        console.rule(f"retry-match result: {result.value}")
+        console.print(f"contact_id: {job.ghl_contact_id or '—'}")
+        console.print(f"note_id:    {job.ghl_note_id or '—'}")
+        console.print(f"status:     {job.status.value}")
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":
     app()
