@@ -71,8 +71,8 @@ def _save_icns() -> Path:
 
 if __name__ == "__main__":
     png = _save_png_512()
-    print(f"✓ {png}")
+    print(f"ok {png}")
     ico = _save_ico()
-    print(f"✓ {ico}")
+    print(f"ok {ico}")
     icns = _save_icns()
-    print(f"✓ {icns}")
+    print(f"ok {icns}")
