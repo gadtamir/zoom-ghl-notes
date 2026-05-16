@@ -24,11 +24,16 @@ from .service import ScannerService
 
 
 def _configure_logging() -> None:
-    """Log to file (rotating) + stdout when run from terminal."""
+    """Log to file (rotating) + stdout when run from terminal.
+
+    Windows PyInstaller --windowed builds run with no console, so `sys.stdout`
+    is None — calling `.isatty()` on it crashes the app at startup. Guard
+    explicitly.
+    """
     handlers: list[logging.Handler] = [
         logging.handlers.RotatingFileHandler(log_path(), maxBytes=2_000_000, backupCount=3, encoding="utf-8"),
     ]
-    if sys.stdout.isatty():
+    if sys.stdout is not None and hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
         handlers.append(logging.StreamHandler(sys.stdout))
     logging.basicConfig(
         level=logging.INFO,
