@@ -62,3 +62,43 @@ class Job(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     employee: Mapped[Employee] = relationship("Employee", back_populates="jobs")
+
+
+class CallJobStatus(str, enum.Enum):
+    received = "received"
+    skipped = "skipped"           # didn't pass duration filter
+    downloaded = "downloaded"
+    transcribed = "transcribed"
+    summarized = "summarized"
+    completed = "completed"        # note created in GHL
+    failed = "failed"
+
+
+class CallJob(Base):
+    """One GHL phone-call recording we've picked up and processed."""
+    __tablename__ = "call_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ghl_message_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    ghl_conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ghl_contact_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ghl_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    ghl_user_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    direction: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    duration_seconds: Mapped[int] = mapped_column(default=0, nullable=False)
+    from_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    to_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    call_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[CallJobStatus] = mapped_column(
+        Enum(CallJobStatus, native_enum=False, length=20),
+        default=CallJobStatus.received,
+        nullable=False,
+        index=True,
+    )
+    transcript: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ghl_note_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(default=0, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

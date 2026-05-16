@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
 
 from ..models import Job, JobStatus
+from ..services.anthropic_client import transliterate_name
 from ..services.ghl_client import GHLClient
 
 
@@ -120,7 +121,9 @@ def _format_note(job: Job) -> str:
 def _gather_candidates(ghl: GHLClient, queries: list[str], job_id: str) -> dict[str, dict]:
     """Run all queries and merge into a contact_id → contact dict.
 
-    The first query that yielded a contact wins for `matched_by` annotation.
+    If no candidates were found after the initial pass, try transliteration
+    variants (Hebrew↔English) for each query and search again. The original
+    `query` field on each candidate records the spelling that actually matched.
     """
     by_id: dict[str, dict] = {}
     for q in queries:
@@ -131,6 +134,29 @@ def _gather_candidates(ghl: GHLClient, queries: list[str], job_id: str) -> dict[
             if not cid or cid in by_id:
                 continue
             by_id[cid] = {"contact": c, "matched_by": q}
+
+    if by_id:
+        return by_id
+
+    # No matches — try transliteration variants (only triggered when needed → cheap).
+    for q in queries:
+        try:
+            variants = transliterate_name(q)
+        except Exception:
+            log.exception("transliterate failed", extra={"job_id": job_id, "query": q})
+            continue
+        for v in variants:
+            log.info("ghl search (transliterated)", extra={"job_id": job_id, "original": q, "variant": v})
+            try:
+                results = ghl.search_contacts(v, limit=_CONTACT_SEARCH_LIMIT_PER_QUERY)
+            except Exception:
+                log.exception("ghl search failed", extra={"job_id": job_id, "query": v})
+                continue
+            for c in results:
+                cid = c.get("id")
+                if not cid or cid in by_id:
+                    continue
+                by_id[cid] = {"contact": c, "matched_by": f"{q} → {v}"}
     return by_id
 
 

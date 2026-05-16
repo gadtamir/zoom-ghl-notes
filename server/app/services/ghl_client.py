@@ -83,6 +83,72 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
+    def search_conversations(self, limit: int = 25, start_after_date: int | None = None) -> list[dict[str, Any]]:
+        """Page of conversations sorted desc by lastMessageDate."""
+        params: dict[str, Any] = {"locationId": self._location_id, "limit": limit}
+        if start_after_date is not None:
+            params["startAfterDate"] = start_after_date
+        r = self._client.get("/conversations/search", params=params, headers={"Version": "2021-04-15"})
+        if r.status_code != 200:
+            raise GHLError(f"search_conversations {r.status_code}: {r.text[:300]}")
+        return r.json().get("conversations", [])
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def list_messages(self, conversation_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        r = self._client.get(
+            f"/conversations/{conversation_id}/messages",
+            params={"limit": limit},
+            headers={"Version": "2021-04-15"},
+        )
+        if r.status_code != 200:
+            raise GHLError(f"list_messages {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        msgs = data.get("messages")
+        if isinstance(msgs, dict):
+            return msgs.get("messages", [])
+        return msgs or []
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def download_call_recording(self, message_id: str) -> bytes:
+        """Fetch the WAV recording bytes for a TYPE_CALL message."""
+        r = self._client.get(
+            f"/conversations/messages/{message_id}/locations/{self._location_id}/recording",
+            headers={"Version": "2021-04-15"},
+        )
+        if r.status_code != 200:
+            raise GHLError(f"download_call_recording {r.status_code}: {r.text[:200]}")
+        return r.content
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def get_user(self, user_id: str) -> dict[str, Any] | None:
+        r = self._client.get(f"/users/{user_id}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise GHLError(f"get_user {r.status_code}: {r.text[:200]}")
+        return r.json()
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
     def create_note(self, contact_id: str, body: str, user_id: str | None = None) -> dict[str, Any]:
         """Attach a note to a contact. Returns the created note object."""
         payload: dict[str, Any] = {"body": body}

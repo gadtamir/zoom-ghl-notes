@@ -14,7 +14,7 @@ from rich.table import Table
 
 from .auth import generate_api_key
 from .db import Base, SessionLocal, engine
-from .models import Employee, Job, JobStatus
+from .models import CallJob, CallJobStatus, Employee, Job, JobStatus
 
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -166,6 +166,66 @@ def retry_match(id: str = typer.Option(..., "--id", help="Job id")) -> None:
         console.print(f"status:     {job.status.value}")
     finally:
         db.close()
+
+
+@app.command(help="List recent GHL phone-call processing jobs.")
+def list_call_jobs(
+    job_status: str | None = typer.Option(None, "--status", help=f"Filter by status: {', '.join(s.value for s in CallJobStatus)}"),
+    limit: int = typer.Option(30),
+) -> None:
+    db = SessionLocal()
+    try:
+        q = db.query(CallJob).order_by(CallJob.created_at.desc())
+        if job_status:
+            q = q.filter(CallJob.status == CallJobStatus(job_status))
+        rows = q.limit(limit).all()
+        table = Table(title=f"Call jobs ({len(rows)})")
+        table.add_column("Created")
+        table.add_column("Owner")
+        table.add_column("Direction")
+        table.add_column("Duration")
+        table.add_column("Status")
+        table.add_column("Contact")
+        for r in rows:
+            table.add_row(
+                r.created_at.isoformat(timespec="seconds"),
+                (r.ghl_user_name or "—")[:20],
+                r.direction or "—",
+                f"{r.duration_seconds // 60}:{r.duration_seconds % 60:02d}",
+                r.status.value,
+                r.ghl_contact_id[:10] if r.ghl_contact_id else "—",
+            )
+        console.print(table)
+    finally:
+        db.close()
+
+
+@app.command(help="Trigger GHL call polling once, immediately (instead of waiting for the beat schedule).")
+def poll_calls_now() -> None:
+    from .tasks.phone_calls import poll_ghl_calls
+    console.print("[cyan]polling GHL for new calls...[/cyan]")
+    result = poll_ghl_calls()
+    console.print(result)
+
+
+@app.command(help="Re-run processing on a single CallJob (e.g. after a transient failure).")
+def retry_call(id: str = typer.Option(..., "--id", help="CallJob id")) -> None:
+    from .tasks.phone_calls import process_call_job
+    db = SessionLocal()
+    try:
+        cj = db.query(CallJob).filter(CallJob.id == id).first()
+        if not cj:
+            console.print("[red]not found[/red]")
+            raise typer.Exit(1)
+        cj.error_message = None
+        cj.completed_at = None
+        cj.status = CallJobStatus.received
+        db.commit()
+    finally:
+        db.close()
+    console.print("[cyan]dispatching process_call_job...[/cyan]")
+    result = process_call_job(id)
+    console.print(result)
 
 
 if __name__ == "__main__":

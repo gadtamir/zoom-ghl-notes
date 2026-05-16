@@ -34,6 +34,7 @@ class Settings(BaseSettings):
 
     celery_task_eager: bool = False
     celery_task_time_limit_sec: int = 60 * 60  # 1h hard limit per task
+    ghl_call_poll_interval_seconds: int = 3 * 60 * 60  # 3 hours
 
 
 @lru_cache

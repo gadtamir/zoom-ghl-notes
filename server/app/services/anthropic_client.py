@@ -111,3 +111,115 @@ def _split_contact_and_summary(text: str) -> tuple[str | None, str]:
     if name in ("לא ידוע", "לא צוין", "-", ""):
         return None, summary
     return name, summary
+
+
+PHONE_CALL_SYSTEM_PROMPT = """אתה עוזר עסקי של גד תמיר, יזם ישראלי שמנהל את More-Than (CRM + אוטומציות).
+לפניך תמלול של שיחת טלפון בין עובדת/עובד של More-Than לבין לקוח/ה.
+
+המשימה שלך: לתת סיכום קצר, ענייני, **בעברית בלבד**, בפורמט המדויק הבא:
+
+סיכום
+[2-4 שורות שמסכמות את עיקרי השיחה — מה היה הנושא, מה היה הקונטקסט, מה הוחלט]
+
+נושא השיחה
+[משפט אחד מתמצת — תמיכה / מכירה / אונבורדינג / חידוש / תלונה / אחר]
+
+משימות
+- [מה לעשות] - אחראי: [שם או "לא צוין"] - דדליין: [תאריך או "לא צוין"]
+- ...
+
+נקודות לעיבוד פנימי
+- [תובנה חשובה 1]
+- [תובנה חשובה 2]
+
+כללים:
+- עברית בלבד
+- ענייני וקצר — שיחות טלפון בד"כ קצרות מפגישות, גם הסיכום צריך להיות קצר
+- אם אין משימות ברורות — כתוב "אין משימות שזוהו"
+- אל תמציא מידע שלא נאמר בשיחה
+- אל תוסיף כותרת/הקדמה לפני "סיכום"
+"""
+
+
+def summarize_phone_call(transcript: str, employee_name: str, duration_seconds: int) -> str:
+    """Hebrew summary of a phone-call transcript. Different prompt/format from meeting summaries."""
+    settings = get_settings()
+    client = _get_client()
+    user_msg = (
+        f"שם העובדת/העובד: {employee_name}\n"
+        f"משך השיחה: {duration_seconds // 60} דקות ו-{duration_seconds % 60} שניות\n\n"
+        f"תמלול השיחה:\n\n{transcript}"
+    )
+    log.info("summarize_phone_call start", extra={"chars": len(transcript), "employee": employee_name, "duration": duration_seconds})
+    message = client.messages.create(
+        model=settings.anthropic_model,
+        max_tokens=1500,
+        temperature=0.3,
+        system=[{"type": "text", "text": PHONE_CALL_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    text = "".join(b.text for b in message.content if hasattr(b, "text")).strip()
+    log.info(
+        "summarize_phone_call done",
+        extra={
+            "out_chars": len(text),
+            "in_tokens": message.usage.input_tokens,
+            "out_tokens": message.usage.output_tokens,
+        },
+    )
+    return text
+
+
+_TRANSLITERATE_SYSTEM = (
+    "You produce common name spelling variants for cross-language lookups.\n"
+    "Given a personal name (Hebrew or English/Latin), return 1-4 alternate spellings "
+    "in the OTHER script that are commonly used for the same name in Israel.\n"
+    "Examples:\n"
+    "  אביאור → Avior, Aviour\n"
+    "  דניאל → Daniel, Dani\n"
+    "  Avi  → אבי, אבי\n"
+    "  Sarah → שרה\n"
+    "Return ONLY a JSON array of strings, no prose. If the input is not a recognizable "
+    "personal name, return []."
+)
+
+
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(2),
+    wait=wait_exponential(multiplier=2, min=2, max=10),
+    retry=retry_if_exception_type((APIConnectionError, RateLimitError, APIError)),
+)
+def transliterate_name(name: str) -> list[str]:
+    """Return common spelling variants of `name` in the other script (Latin <-> Hebrew).
+
+    Empty list if Claude can't or shouldn't variate. Tiny call — cached system prompt,
+    output is just a short JSON array.
+    """
+    if not name or len(name.strip()) < 2:
+        return []
+    settings = get_settings()
+    client = _get_client()
+
+    import json as _json
+    message = client.messages.create(
+        model=settings.anthropic_model,
+        max_tokens=120,
+        temperature=0.2,
+        system=[{"type": "text", "text": _TRANSLITERATE_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": name.strip()}],
+    )
+    raw = "".join(b.text for b in message.content if hasattr(b, "text")).strip()
+    log.info("transliterate", extra={"name": name, "raw": raw[:200]})
+
+    # Pull the first JSON array out — Claude may occasionally wrap in ```json fences.
+    m = re.search(r"\[[^\]]*\]", raw, re.DOTALL)
+    if not m:
+        return []
+    try:
+        out = _json.loads(m.group(0))
+    except _json.JSONDecodeError:
+        return []
+    if not isinstance(out, list):
+        return []
+    return [str(x).strip() for x in out if isinstance(x, str) and x.strip() and x.strip().lower() != name.strip().lower()]

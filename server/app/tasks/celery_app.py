@@ -11,7 +11,7 @@ celery_app = Celery(
     "zoom_ghl",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.pipeline"],
+    include=["app.tasks.pipeline", "app.tasks.phone_calls"],
 )
 
 celery_app.conf.update(
@@ -27,4 +27,10 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     broker_connection_retry_on_startup=True,
+    beat_schedule={
+        "poll-ghl-calls": {
+            "task": "phone_calls.poll",
+            "schedule": settings.ghl_call_poll_interval_seconds,
+        },
+    },
 )
