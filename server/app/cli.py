@@ -200,11 +200,11 @@ def list_call_jobs(
         db.close()
 
 
-@app.command(help="Trigger GHL call polling once, immediately (instead of waiting for the beat schedule).")
-def poll_calls_now() -> None:
+@app.command(help="Trigger GHL call polling once, immediately. --hours-back lets you backfill a wider window than the scheduled 12h.")
+def poll_calls_now(hours_back: int = typer.Option(12, "--hours-back", help="How far back to scan, in hours")) -> None:
     from .tasks.phone_calls import poll_ghl_calls
-    console.print("[cyan]polling GHL for new calls...[/cyan]")
-    result = poll_ghl_calls()
+    console.print(f"[cyan]polling GHL for new calls (hours_back={hours_back})...[/cyan]")
+    result = poll_ghl_calls(hours_back=hours_back)
     console.print(result)
 
 

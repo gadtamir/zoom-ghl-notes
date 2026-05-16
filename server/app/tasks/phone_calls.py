@@ -30,8 +30,8 @@ log = logging.getLogger(__name__)
 
 
 MIN_DURATION_SEC = 60
-POLL_WINDOW_HOURS = 12      # generous overlap window — dedup via ghl_message_id
-MAX_CONVS_PER_POLL = 60     # scan a few pages of recent conversations
+DEFAULT_POLL_WINDOW_HOURS = 12     # generous overlap window — dedup via ghl_message_id
+MAX_CONVS_PER_POLL = 200           # cap to avoid runaway scans on a large workspace
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -60,10 +60,15 @@ def _format_note(cj: CallJob) -> str:
 
 
 @celery_app.task(name="phone_calls.poll")
-def poll_ghl_calls() -> dict:
-    """Discover new TYPE_CALL messages, enqueue per-call processing."""
+def poll_ghl_calls(hours_back: int = DEFAULT_POLL_WINDOW_HOURS) -> dict:
+    """Discover new TYPE_CALL messages, enqueue per-call processing.
+
+    Scans conversations whose lastMessage is within the last `hours_back` hours.
+    Default 12h is right for the scheduled run; admins can pass a larger value
+    via the CLI to backfill historical calls.
+    """
     settings = get_settings()
-    since = datetime.utcnow() - timedelta(hours=POLL_WINDOW_HOURS)
+    since = datetime.utcnow() - timedelta(hours=hours_back)
     since_ms = int(since.timestamp() * 1000)
     db = SessionLocal()
     new_calls = 0
