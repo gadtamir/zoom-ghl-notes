@@ -140,6 +140,107 @@ def poll_ghl_calls(hours_back: int = DEFAULT_POLL_WINDOW_HOURS) -> dict:
     return summary
 
 
+@celery_app.task(name="phone_calls.poll_pipeline", time_limit=60 * 60)
+def poll_pipeline_calls(pipeline_id: str, exclude_stage_ids: list[str] | None = None) -> dict:
+    """Backfill: for every contact attached to an opportunity in the given pipeline
+    (excluding the listed stages), discover their TYPE_CALL messages > 1 min and
+    enqueue per-call processing. Dedupe via the existing ghl_message_id constraint.
+    """
+    exclude_set = set(exclude_stage_ids or [])
+    db = SessionLocal()
+    seen_contacts: set[str] = set()
+    new_calls = 0
+    skipped_dup = 0
+    skipped_short = 0
+    opportunities_scanned = 0
+    excluded_opps = 0
+    try:
+        with GHLClient() as ghl:
+            start_after: int | None = None
+            start_after_id: str | None = None
+            while True:
+                page = ghl.opportunities_page(
+                    pipeline_id=pipeline_id,
+                    limit=100,
+                    start_after=start_after,
+                    start_after_id=start_after_id,
+                )
+                opps = page.get("opportunities", [])
+                if not opps:
+                    break
+                for o in opps:
+                    opportunities_scanned += 1
+                    stage_id = o.get("pipelineStageId", "")
+                    if stage_id in exclude_set:
+                        excluded_opps += 1
+                        continue
+                    contact_id = o.get("contactId")
+                    if not contact_id or contact_id in seen_contacts:
+                        continue
+                    seen_contacts.add(contact_id)
+
+                    convs = ghl.search_conversations(limit=25, contact_id=contact_id)
+                    for c in convs:
+                        msgs = ghl.list_messages(c["id"], limit=100)
+                        for m in msgs:
+                            if m.get("messageType") != "TYPE_CALL":
+                                continue
+                            duration = (m.get("meta") or {}).get("call", {}).get("duration") or 0
+                            if duration < MIN_DURATION_SEC:
+                                skipped_short += 1
+                                continue
+                            message_id = m.get("id")
+                            if not message_id:
+                                continue
+                            if db.query(CallJob).filter(CallJob.ghl_message_id == message_id).first():
+                                skipped_dup += 1
+                                continue
+                            cj = CallJob(
+                                ghl_message_id=message_id,
+                                ghl_conversation_id=c["id"],
+                                ghl_contact_id=contact_id,
+                                ghl_user_id=m.get("userId"),
+                                direction=m.get("direction"),
+                                duration_seconds=duration,
+                                from_number=m.get("from"),
+                                to_number=m.get("to"),
+                                call_started_at=_parse_iso(m.get("dateAdded")),
+                                status=CallJobStatus.received,
+                            )
+                            db.add(cj)
+                            db.commit()
+                            db.refresh(cj)
+                            new_calls += 1
+                            log.info(
+                                "call_job (pipeline) created",
+                                extra={"call_job_id": cj.id, "message_id": message_id, "duration": duration, "contact": contact_id},
+                            )
+                            process_call_job.delay(cj.id)
+
+                meta = page.get("meta", {})
+                next_page = meta.get("nextPage")
+                if not next_page:
+                    break
+                start_after = meta.get("startAfter")
+                start_after_id = meta.get("startAfterId")
+                if not start_after or not start_after_id:
+                    break
+    finally:
+        db.close()
+
+    summary = {
+        "pipeline_id": pipeline_id,
+        "opportunities_scanned": opportunities_scanned,
+        "excluded_opportunities": excluded_opps,
+        "unique_contacts": len(seen_contacts),
+        "new_calls": new_calls,
+        "skipped_dup": skipped_dup,
+        "skipped_short": skipped_short,
+    }
+    log.info("poll_pipeline_calls done", extra=summary)
+    return summary
+
+
 @celery_app.task(name="phone_calls.process", bind=True, max_retries=0)
 def process_call_job(self, call_job_id: str) -> dict:
     db = SessionLocal()

@@ -228,5 +228,63 @@ def retry_call(id: str = typer.Option(..., "--id", help="CallJob id")) -> None:
     console.print(result)
 
 
+@app.command(help="Discover calls for contacts in a GHL opportunity pipeline. Excludes the listed stage substrings (case-insensitive).")
+def process_pipeline_calls(
+    pipeline: str = typer.Option("פייפליין ליד ראשי", "--pipeline", help="Pipeline name (substring match)"),
+    exclude: list[str] = typer.Option(
+        ["לא רלוונטי", "להתקדם בהמשך", "ספאם"],
+        "--exclude",
+        help="Stage-name substrings to skip (repeat flag for multiple). Case-insensitive.",
+    ),
+    list_only: bool = typer.Option(False, "--list-only", help="Just preview matched pipeline + included/excluded stages, don't enqueue."),
+) -> None:
+    from .services.ghl_client import GHLClient
+    from .tasks.phone_calls import poll_pipeline_calls
+
+    with GHLClient() as ghl:
+        pipelines = ghl.list_pipelines()
+
+    matched = [p for p in pipelines if pipeline.lower() in (p.get("name") or "").lower()]
+    if not matched:
+        console.print(f"[red]No pipeline matches[/red] '{pipeline}'. Available:")
+        for p in pipelines:
+            console.print(f"  - {p.get('name','')}")
+        raise typer.Exit(1)
+    if len(matched) > 1:
+        console.print(f"[red]Ambiguous — {len(matched)} pipelines match[/red]. Be more specific:")
+        for p in matched:
+            console.print(f"  - {p.get('name','')}")
+        raise typer.Exit(1)
+
+    p = matched[0]
+    stages = p.get("stages", [])
+    exclude_lower = [e.lower() for e in exclude]
+    included, excluded = [], []
+    for s in stages:
+        name = s.get("name", "")
+        if any(e in name.lower() for e in exclude_lower):
+            excluded.append(s)
+        else:
+            included.append(s)
+
+    table = Table(title=f"Pipeline: {p.get('name','')}")
+    table.add_column("Status")
+    table.add_column("Stage")
+    for s in included:
+        table.add_row("[green]include[/green]", s.get("name", ""))
+    for s in excluded:
+        table.add_row("[yellow]exclude[/yellow]", s.get("name", ""))
+    console.print(table)
+
+    if list_only:
+        return
+
+    exclude_ids = [s["id"] for s in excluded]
+    console.print(f"[cyan]dispatching poll_pipeline_calls task...[/cyan]")
+    task = poll_pipeline_calls.delay(pipeline_id=p["id"], exclude_stage_ids=exclude_ids)
+    console.print(f"[green]task dispatched[/green] id={task.id}")
+    console.print("Track progress with: [bold]python -m app.cli list-call-jobs[/bold]")
+
+
 if __name__ == "__main__":
     app()

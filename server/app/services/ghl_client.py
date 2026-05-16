@@ -83,15 +83,68 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
-    def search_conversations(self, limit: int = 25, start_after_date: int | None = None) -> list[dict[str, Any]]:
-        """Page of conversations sorted desc by lastMessageDate."""
+    def search_conversations(
+        self,
+        limit: int = 25,
+        start_after_date: int | None = None,
+        contact_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Page of conversations sorted desc by lastMessageDate.
+
+        If `contact_id` is provided, results are restricted to that contact.
+        """
         params: dict[str, Any] = {"locationId": self._location_id, "limit": limit}
         if start_after_date is not None:
             params["startAfterDate"] = start_after_date
+        if contact_id:
+            params["contactId"] = contact_id
         r = self._client.get("/conversations/search", params=params, headers={"Version": "2021-04-15"})
         if r.status_code != 200:
             raise GHLError(f"search_conversations {r.status_code}: {r.text[:300]}")
         return r.json().get("conversations", [])
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def list_pipelines(self) -> list[dict[str, Any]]:
+        """All opportunity pipelines (each carries its `stages` list inline)."""
+        r = self._client.get(
+            "/opportunities/pipelines",
+            params={"locationId": self._location_id},
+        )
+        if r.status_code != 200:
+            raise GHLError(f"list_pipelines {r.status_code}: {r.text[:300]}")
+        return r.json().get("pipelines", [])
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def opportunities_page(
+        self,
+        pipeline_id: str,
+        limit: int = 100,
+        start_after: int | None = None,
+        start_after_id: str | None = None,
+    ) -> dict[str, Any]:
+        """One page of opportunities. Returns the raw payload incl. `meta.nextPage*`."""
+        params: dict[str, Any] = {
+            "location_id": self._location_id,
+            "pipeline_id": pipeline_id,
+            "limit": limit,
+        }
+        if start_after is not None and start_after_id is not None:
+            params["startAfter"] = start_after
+            params["startAfterId"] = start_after_id
+        r = self._client.get("/opportunities/search", params=params)
+        if r.status_code != 200:
+            raise GHLError(f"opportunities_page {r.status_code}: {r.text[:300]}")
+        return r.json()
 
     @retry(
         reraise=True,
