@@ -21,7 +21,7 @@ from ..config import get_settings
 from ..db import SessionLocal
 from ..models import CallJob, CallJobStatus
 from ..services.anthropic_client import summarize_phone_call
-from ..services.ghl_client import GHLClient
+from ..services.ghl_client import GHLClient, GHLError
 from .celery_app import celery_app
 from .transcribe import transcribe_audio
 
@@ -255,12 +255,30 @@ def process_call_job(self, call_job_id: str) -> dict:
         try:
             with GHLClient() as ghl:
                 audio = ghl.download_call_recording(cj.ghl_message_id)
+                # User name is best-effort metadata; a 400/404 here must not kill the job.
                 if cj.ghl_user_id and not cj.ghl_user_name:
-                    user = ghl.get_user(cj.ghl_user_id)
-                    if user:
-                        cj.ghl_user_name = user.get("name") or " ".join(
-                            filter(None, [user.get("firstName"), user.get("lastName")])
-                        )
+                    try:
+                        user = ghl.get_user(cj.ghl_user_id)
+                        if user:
+                            cj.ghl_user_name = user.get("name") or " ".join(
+                                filter(None, [user.get("firstName"), user.get("lastName")])
+                            )
+                    except GHLError as exc:
+                        log.warning("get_user failed — continuing without name", extra={"call_job_id": cj.id, "user_id": cj.ghl_user_id, "err": str(exc)[:200]})
+        except GHLError as exc:
+            # 422 commonly means: call exists but has no recording (didn't connect,
+            # voicemail without record, externally-imported call, etc.). Mark
+            # as `skipped` so it doesn't show up as a real failure.
+            msg = str(exc)
+            if "422" in msg:
+                log.info("call has no recording — skipping", extra={"call_job_id": cj.id, "ghl_msg": cj.ghl_message_id})
+                cj.status = CallJobStatus.skipped
+                cj.error_message = "no recording (HTTP 422)"
+                cj.completed_at = datetime.utcnow()
+                db.commit()
+                return {"call_job_id": cj.id, "status": "skipped", "reason": "no recording"}
+            log.exception("download failed", extra={"call_job_id": cj.id})
+            return _fail(db, cj, f"download: {exc}")
         except Exception as exc:
             log.exception("download failed", extra={"call_job_id": cj.id})
             return _fail(db, cj, f"download: {exc}")
