@@ -141,7 +141,11 @@ def poll_ghl_calls(hours_back: int = DEFAULT_POLL_WINDOW_HOURS) -> dict:
 
 
 @celery_app.task(name="phone_calls.poll_pipeline", time_limit=60 * 60)
-def poll_pipeline_calls(pipeline_id: str, exclude_stage_ids: list[str] | None = None) -> dict:
+def poll_pipeline_calls(
+    pipeline_id: str,
+    exclude_stage_ids: list[str] | None = None,
+    owner_user_id: str | None = None,
+) -> dict:
     """Backfill: for every contact attached to an opportunity in the given pipeline
     (excluding the listed stages), discover their TYPE_CALL messages > 1 min and
     enqueue per-call processing. Dedupe via the existing ghl_message_id constraint.
@@ -184,6 +188,8 @@ def poll_pipeline_calls(pipeline_id: str, exclude_stage_ids: list[str] | None = 
                         msgs = ghl.list_messages(c["id"], limit=100)
                         for m in msgs:
                             if m.get("messageType") != "TYPE_CALL":
+                                continue
+                            if owner_user_id and m.get("userId") != owner_user_id:
                                 continue
                             duration = (m.get("meta") or {}).get("call", {}).get("duration") or 0
                             if duration < MIN_DURATION_SEC:

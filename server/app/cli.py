@@ -232,10 +232,11 @@ def retry_call(id: str = typer.Option(..., "--id", help="CallJob id")) -> None:
 def process_pipeline_calls(
     pipeline: str = typer.Option("פייפליין ליד ראשי", "--pipeline", help="Pipeline name (substring match)"),
     exclude: list[str] = typer.Option(
-        ["לא רלוונטי", "להתקדם בהמשך", "ספאם"],
+        ["לא רלוונטי", "להתקדם בהמשך", "ספאם", "ליד נסגר"],
         "--exclude",
         help="Stage-name substrings to skip (repeat flag for multiple). Case-insensitive.",
     ),
+    owner: str | None = typer.Option(None, "--owner", help="Only enqueue calls whose GHL user (employee) name contains this substring. Case-insensitive."),
     list_only: bool = typer.Option(False, "--list-only", help="Just preview matched pipeline + included/excluded stages, don't enqueue."),
 ) -> None:
     from .services.ghl_client import GHLClient
@@ -280,8 +281,31 @@ def process_pipeline_calls(
         return
 
     exclude_ids = [s["id"] for s in excluded]
+    owner_user_id: str | None = None
+    if owner:
+        with GHLClient() as ghl:
+            r = ghl._client.get("/users/", params={"locationId": ghl._location_id})
+            users = r.json().get("users", []) if r.status_code == 200 else []
+        matched_users = [u for u in users if owner.lower() in (u.get("name") or "").lower()]
+        if not matched_users:
+            console.print(f"[red]No GHL user matches[/red] '{owner}'. Available users:")
+            for u in users[:15]:
+                console.print(f"  - {u.get('name','')}")
+            raise typer.Exit(1)
+        if len(matched_users) > 1:
+            console.print(f"[red]Ambiguous owner — {len(matched_users)} match[/red]:")
+            for u in matched_users:
+                console.print(f"  - {u.get('name','')}")
+            raise typer.Exit(1)
+        owner_user_id = matched_users[0]["id"]
+        console.print(f"[cyan]filtering by owner:[/cyan] {matched_users[0].get('name','')} (id={owner_user_id})")
+
     console.print(f"[cyan]dispatching poll_pipeline_calls task...[/cyan]")
-    task = poll_pipeline_calls.delay(pipeline_id=p["id"], exclude_stage_ids=exclude_ids)
+    task = poll_pipeline_calls.delay(
+        pipeline_id=p["id"],
+        exclude_stage_ids=exclude_ids,
+        owner_user_id=owner_user_id,
+    )
     console.print(f"[green]task dispatched[/green] id={task.id}")
     console.print("Track progress with: [bold]python -m app.cli list-call-jobs[/bold]")
 
