@@ -96,8 +96,12 @@ def poll_ghl_calls(hours_back: int = DEFAULT_POLL_WINDOW_HOURS) -> dict:
                         message_id = m.get("id")
                         if not message_id:
                             continue
-                        duration = (m.get("meta") or {}).get("call", {}).get("duration") or 0
-                        if duration < MIN_DURATION_SEC:
+                        duration = (m.get("meta") or {}).get("call", {}).get("duration")
+                        # GHL sometimes returns duration=None even when a real
+                        # recording exists (metadata bug). Skip only when we
+                        # have a confirmed-short duration; if it's missing,
+                        # let the download step decide via the 422 path.
+                        if duration is not None and duration < MIN_DURATION_SEC:
                             skipped_short += 1
                             continue
                         if db.query(CallJob).filter(CallJob.ghl_message_id == message_id).first():
@@ -109,7 +113,7 @@ def poll_ghl_calls(hours_back: int = DEFAULT_POLL_WINDOW_HOURS) -> dict:
                             ghl_contact_id=m.get("contactId") or "",
                             ghl_user_id=m.get("userId"),
                             direction=m.get("direction"),
-                            duration_seconds=duration,
+                            duration_seconds=duration or 0,
                             from_number=m.get("from"),
                             to_number=m.get("to"),
                             call_started_at=msg_added,
@@ -191,8 +195,9 @@ def poll_pipeline_calls(
                                 continue
                             if owner_user_id and m.get("userId") != owner_user_id:
                                 continue
-                            duration = (m.get("meta") or {}).get("call", {}).get("duration") or 0
-                            if duration < MIN_DURATION_SEC:
+                            duration = (m.get("meta") or {}).get("call", {}).get("duration")
+                            # See poll_ghl_calls — duration may be None despite a real recording.
+                            if duration is not None and duration < MIN_DURATION_SEC:
                                 skipped_short += 1
                                 continue
                             message_id = m.get("id")
@@ -207,7 +212,7 @@ def poll_pipeline_calls(
                                 ghl_contact_id=contact_id,
                                 ghl_user_id=m.get("userId"),
                                 direction=m.get("direction"),
-                                duration_seconds=duration,
+                                duration_seconds=duration or 0,
                                 from_number=m.get("from"),
                                 to_number=m.get("to"),
                                 call_started_at=_parse_iso(m.get("dateAdded")),

@@ -169,6 +169,22 @@ class GHLClient:
     @retry(
         reraise=True,
         stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=10),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def get_message(self, message_id: str) -> dict[str, Any]:
+        r = self._client.get(
+            f"/conversations/messages/{message_id}",
+            headers={"Version": "2021-04-15"},
+        )
+        if r.status_code != 200:
+            raise GHLError(f"get_message {r.status_code}: {r.text[:300]}")
+        data = r.json()
+        return data.get("message", data)
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )

@@ -130,6 +130,51 @@ def list_jobs(
         db.close()
 
 
+@app.command(help="Manually process a single GHL call by message id (bypasses the duration filter).")
+def process_call(
+    message_id: str = typer.Option(..., "--message-id", help="GHL message id (TYPE_CALL)"),
+) -> None:
+    from .models import CallJob, CallJobStatus
+    from .services.ghl_client import GHLClient
+    from .tasks.phone_calls import process_call_job, _parse_iso
+
+    db = SessionLocal()
+    try:
+        existing = db.query(CallJob).filter(CallJob.ghl_message_id == message_id).first()
+        if existing:
+            console.print(f"[yellow]CallJob already exists[/yellow]  id={existing.id}  status={existing.status.value}")
+            if existing.status in (CallJobStatus.completed, CallJobStatus.summarized):
+                console.print("[red]already processed — refusing to re-enqueue[/red]")
+                raise typer.Exit(code=1)
+            cj_id = existing.id
+        else:
+            with GHLClient() as ghl:
+                msg = ghl.get_message(message_id)
+            duration = (msg.get("meta") or {}).get("call", {}).get("duration") or 0
+            cj = CallJob(
+                ghl_message_id=message_id,
+                ghl_conversation_id=msg.get("conversationId"),
+                ghl_contact_id=msg.get("contactId") or "",
+                ghl_user_id=msg.get("userId"),
+                direction=msg.get("direction"),
+                duration_seconds=duration,
+                from_number=msg.get("from"),
+                to_number=msg.get("to"),
+                call_started_at=_parse_iso(msg.get("dateAdded")),
+                status=CallJobStatus.received,
+            )
+            db.add(cj)
+            db.commit()
+            db.refresh(cj)
+            cj_id = cj.id
+            console.print(f"[green]Created CallJob[/green] id={cj_id}  contact={cj.ghl_contact_id}")
+
+        process_call_job.delay(cj_id)
+        console.print(f"[cyan]Enqueued process_call_job for {cj_id}[/cyan]")
+    finally:
+        db.close()
+
+
 @app.command(help="Re-run only the GHL match+note stage on an already-summarized job.")
 def retry_match(id: str = typer.Option(..., "--id", help="Job id")) -> None:
     from .tasks.ghl import attach_note
