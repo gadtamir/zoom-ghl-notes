@@ -29,7 +29,7 @@ from .transcribe import transcribe_audio
 log = logging.getLogger(__name__)
 
 
-MIN_DURATION_SEC = 60
+MIN_DURATION_SEC = 30
 DEFAULT_POLL_WINDOW_HOURS = 12     # generous overlap window — dedup via ghl_message_id
 MAX_CONVS_PER_POLL = 200           # cap to avoid runaway scans on a large workspace
 
