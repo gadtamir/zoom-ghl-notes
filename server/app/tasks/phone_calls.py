@@ -33,6 +33,12 @@ MIN_DURATION_SEC = 30
 DEFAULT_POLL_WINDOW_HOURS = 12     # generous overlap window — dedup via ghl_message_id
 MAX_CONVS_PER_POLL = 200           # cap to avoid runaway scans on a large workspace
 
+# GHL emits at least two phone-call message types. TYPE_CALL is a manual call;
+# TYPE_CAMPAIGN_CALL is a call placed via a campaign / dialer (the path most
+# of Vika's scheduled callbacks go through). Both have a downloadable recording
+# on the same endpoint, so we treat them identically.
+CALL_MESSAGE_TYPES = {"TYPE_CALL", "TYPE_CAMPAIGN_CALL"}
+
 
 def _parse_iso(value: str | None) -> datetime | None:
     if not value:
@@ -88,7 +94,7 @@ def poll_ghl_calls(hours_back: int = DEFAULT_POLL_WINDOW_HOURS) -> dict:
                     last_updated = c.get("dateUpdated")
                     msgs = ghl.list_messages(c["id"], limit=100)
                     for m in msgs:
-                        if m.get("messageType") != "TYPE_CALL":
+                        if m.get("messageType") not in CALL_MESSAGE_TYPES:
                             continue
                         msg_added = _parse_iso(m.get("dateAdded"))
                         if msg_added and msg_added < since:
@@ -191,7 +197,7 @@ def poll_pipeline_calls(
                     for c in convs:
                         msgs = ghl.list_messages(c["id"], limit=100)
                         for m in msgs:
-                            if m.get("messageType") != "TYPE_CALL":
+                            if m.get("messageType") not in CALL_MESSAGE_TYPES:
                                 continue
                             if owner_user_id and m.get("userId") != owner_user_id:
                                 continue
