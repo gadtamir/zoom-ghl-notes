@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     admin_email: str = "gad@morethan.com"
     resend_api_key: str = ""
     alert_from_email: str = "alerts@morethan.com"   # must be a Resend-verified sender
+    admin_sms_phone: str = "0548088154"             # GHL contact to SMS on alerts ("" = off)
 
     max_upload_mb: int = 500
     transcript_chunk_minutes: int = 10

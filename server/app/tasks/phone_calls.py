@@ -22,7 +22,7 @@ from ..db import SessionLocal
 from ..models import CallJob, CallJobStatus
 from ..services.anthropic_client import summarize_phone_call
 from ..services.ghl_client import GHLClient, GHLError
-from ..services.notify import is_credit_error, send_admin_alert
+from ..services.notify import alert_admin, is_credit_error
 from .celery_app import celery_app
 from .transcribe import transcribe_audio
 
@@ -373,7 +373,7 @@ def _retry_or_fail(self, db: Session, cj: CallJob, stage: str, exc: Exception) -
 
     if is_credit_error(exc):
         provider = "OpenAI" if stage == "transcribe" else "Anthropic"
-        send_admin_alert(
+        alert_admin(
             subject=f"⚠️ תמלול פגישות: נראה שנגמר הקרדיט ({provider})",
             body=(
                 f"שלב '{stage}' נכשל עם שגיאה שנראית כמו חוסר קרדיט/מכסה.\n"
@@ -382,6 +382,7 @@ def _retry_or_fail(self, db: Session, cj: CallJob, stage: str, exc: Exception) -
                 f"Anthropic: https://console.anthropic.com/settings/billing\n\n"
                 f"call_job_id={cj.id}\nשגיאה: {str(exc)[:500]}"
             ),
+            sms_text=f"⚠️ תמלול פגישות: נראה שנגמר הקרדיט ב-{provider}. שיחות לא מתומללות עד טעינת יתרה.",
             throttle_key=f"credit:{provider.lower()}",
         )
 
@@ -445,13 +446,14 @@ def reconcile_stuck_calls() -> dict:
         db.close()
 
     if gave_up:
-        send_admin_alert(
+        alert_admin(
             subject=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית",
             body=(
                 f"{gave_up} שיחות עברו {MAX_ATTEMPTS} ניסיונות ועדיין לא תומללו — "
                 f"צריך בדיקה ידנית (scripts/backfill_calls.py).\n"
                 f"({requeued} שיחות אחרות נשלחו שוב לעיבוד.)"
             ),
+            sms_text=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית וצריכות בדיקה ידנית.",
             throttle_key="reconcile-gaveup",
         )
 

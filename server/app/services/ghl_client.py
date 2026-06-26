@@ -229,3 +229,25 @@ class GHLClient:
         data = r.json()
         # API returns {"note": {...}} on success.
         return data.get("note", data)
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def send_sms(self, contact_id: str, message: str) -> dict[str, Any]:
+        """Send an SMS to a contact via the conversations API.
+
+        The conversations endpoints use Version 2021-04-15 (not the default
+        2021-07-28), so we override the header per request.
+        """
+        payload = {"type": "SMS", "contactId": contact_id, "message": message}
+        r = self._client.post(
+            "/conversations/messages",
+            json=payload,
+            headers={"Version": "2021-04-15"},
+        )
+        if r.status_code not in (200, 201):
+            raise GHLError(f"send_sms {r.status_code}: {r.text[:300]}")
+        return r.json()

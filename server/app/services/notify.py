@@ -39,6 +39,81 @@ def _throttled(key: str) -> bool:
         return False
 
 
+def alert_admin(
+    subject: str,
+    body: str,
+    sms_text: str | None = None,
+    throttle_key: str | None = None,
+) -> None:
+    """Notify the admin across all configured channels (SMS via GHL + email).
+
+    Throttling is applied ONCE here (not per channel) so a single throttle_key
+    suppresses the whole alert, not just the first channel that fires.
+    """
+    if throttle_key and _throttled(throttle_key):
+        log.info("admin alert throttled, skipping: %s", throttle_key)
+        return
+    send_admin_sms(sms_text or subject)
+    send_admin_alert(subject, body)
+
+
+def _digits(value: str | None) -> str:
+    return "".join(ch for ch in (value or "") if ch.isdigit())
+
+
+def _il_e164(phone: str) -> str:
+    """Normalize an Israeli number to E.164 (+972...). GHL's contact search only
+    matches the stored E.164 form, not the local 0xx form."""
+    d = _digits(phone)
+    if d.startswith("0"):
+        d = "972" + d[1:]
+    elif not d.startswith("972"):
+        d = "972" + d
+    return "+" + d
+
+
+def send_admin_sms(message: str, throttle_key: str | None = None) -> None:
+    """SMS the admin via GHL. No-op (logged) if not configured/contact missing.
+
+    Resolves the GHL contact by phone (admin_sms_phone), then sends an SMS on
+    the conversations API. Best-effort: never raises into the caller.
+    """
+    if throttle_key and _throttled(throttle_key):
+        log.info("admin SMS throttled, skipping: %s", throttle_key)
+        return
+
+    settings = get_settings()
+    phone = settings.admin_sms_phone
+    if not phone:
+        return
+    # Imported here (not at module top) to avoid pulling httpx/GHL on every
+    # import of notify, and to keep the import graph flat.
+    from .ghl_client import GHLClient, GHLError
+
+    target = _digits(phone)[-9:]   # last 9 digits — robust to +972 / 0 prefixes
+    try:
+        with GHLClient() as ghl:
+            # GHL only matches the stored E.164 form, so query that first.
+            contact_id = None
+            for query in (_il_e164(phone), phone):
+                contacts = ghl.search_contacts(query=query, limit=10)
+                contact_id = next(
+                    (c.get("id") for c in contacts if _digits(c.get("phone")).endswith(target)),
+                    None,
+                )
+                if contact_id:
+                    break
+            if not contact_id:
+                log.error("admin SMS: no GHL contact matches phone %s", phone)
+                return
+            ghl.send_sms(contact_id, message)
+            log.info("admin SMS sent to %s (contact %s)", phone, contact_id)
+    except GHLError as exc:
+        log.error("admin SMS failed (GHL): %s", exc)
+    except Exception as exc:  # noqa: BLE001 — alerting is best-effort
+        log.error("admin SMS failed: %s", exc)
+
+
 def send_admin_alert(subject: str, body: str, throttle_key: str | None = None) -> None:
     """Email the admin. No-op (with a log line) if not configured or throttled."""
     if throttle_key and _throttled(throttle_key):
