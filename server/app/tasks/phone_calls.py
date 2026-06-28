@@ -22,6 +22,7 @@ from ..db import SessionLocal
 from ..models import CallJob, CallJobStatus
 from ..services.anthropic_client import summarize_phone_call
 from ..services.ghl_client import GHLClient, GHLError
+from ..services.notify import alert_admin, is_credit_error
 from .celery_app import celery_app
 from .transcribe import transcribe_audio
 
@@ -32,6 +33,20 @@ log = logging.getLogger(__name__)
 MIN_DURATION_SEC = 30
 DEFAULT_POLL_WINDOW_HOURS = 12     # generous overlap window — dedup via ghl_message_id
 MAX_CONVS_PER_POLL = 200           # cap to avoid runaway scans on a large workspace
+
+# Retry policy for process_call_job. A failed stage (download/transcribe/etc.)
+# is retried with growing backoff before being marked terminally `failed`, so a
+# transient API/network blip — or a brief credit-out — recovers on its own.
+MAX_RETRIES = 3
+RETRY_BACKOFF_SEC = (60, 300, 900)   # 1m, 5m, 15m
+
+# Self-healing reconciler. The poller dedups by ghl_message_id against ANY
+# existing CallJob, so a once-failed/stuck call would never be retried by
+# polling alone. The reconciler re-enqueues such calls.
+TERMINAL_STATUSES = (CallJobStatus.completed, CallJobStatus.skipped)
+MAX_ATTEMPTS = 5                       # give up (and flag) after this many tries
+RECONCILE_LOOKBACK_HOURS = 24 * 7      # only chase calls from the last week
+RECONCILE_MIN_AGE_MINUTES = 30         # don't touch a job that may still be running
 
 # GHL emits at least two phone-call message types. TYPE_CALL is a manual call;
 # TYPE_CAMPAIGN_CALL is a call placed via a campaign / dialer (the path most
@@ -258,7 +273,7 @@ def poll_pipeline_calls(
     return summary
 
 
-@celery_app.task(name="phone_calls.process", bind=True, max_retries=0)
+@celery_app.task(name="phone_calls.process", bind=True, max_retries=MAX_RETRIES)
 def process_call_job(self, call_job_id: str) -> dict:
     db = SessionLocal()
     audio_path: Path | None = None
@@ -295,10 +310,10 @@ def process_call_job(self, call_job_id: str) -> dict:
                 db.commit()
                 return {"call_job_id": cj.id, "status": "skipped", "reason": "no recording"}
             log.exception("download failed", extra={"call_job_id": cj.id})
-            return _fail(db, cj, f"download: {exc}")
+            return _retry_or_fail(self, db, cj, "download", exc)
         except Exception as exc:
             log.exception("download failed", extra={"call_job_id": cj.id})
-            return _fail(db, cj, f"download: {exc}")
+            return _retry_or_fail(self, db, cj, "download", exc)
 
         audio_path = _call_storage_path(cj.id)
         audio_path.parent.mkdir(parents=True, exist_ok=True)
@@ -313,7 +328,7 @@ def process_call_job(self, call_job_id: str) -> dict:
             db.commit()
         except Exception as exc:
             log.exception("transcribe failed", extra={"call_job_id": cj.id})
-            return _fail(db, cj, f"transcribe: {exc}")
+            return _retry_or_fail(self, db, cj, "transcribe", exc)
 
         try:
             cj.summary = summarize_phone_call(
@@ -325,7 +340,7 @@ def process_call_job(self, call_job_id: str) -> dict:
             db.commit()
         except Exception as exc:
             log.exception("summarize failed", extra={"call_job_id": cj.id})
-            return _fail(db, cj, f"summarize: {exc}")
+            return _retry_or_fail(self, db, cj, "summarize", exc)
 
         try:
             with GHLClient() as ghl:
@@ -336,7 +351,7 @@ def process_call_job(self, call_job_id: str) -> dict:
             db.commit()
         except Exception as exc:
             log.exception("create_note failed", extra={"call_job_id": cj.id})
-            return _fail(db, cj, f"create_note: {exc}")
+            return _retry_or_fail(self, db, cj, "create_note", exc)
 
         log.info("call_job completed", extra={"call_job_id": cj.id, "contact": cj.ghl_contact_id, "note": cj.ghl_note_id})
         return {"call_job_id": cj.id, "status": "completed", "note_id": cj.ghl_note_id}
@@ -349,9 +364,99 @@ def process_call_job(self, call_job_id: str) -> dict:
         db.close()
 
 
+def _retry_or_fail(self, db: Session, cj: CallJob, stage: str, exc: Exception) -> dict:
+    """Reschedule the call with backoff; mark it terminally `failed` only once
+    retries are exhausted. Also fires a (throttled) admin alert the moment a
+    failure looks like an API credit/quota problem — the #1 root cause."""
+    cj.error_message = f"{stage}: {exc}"
+    db.commit()
+
+    if is_credit_error(exc):
+        provider = "OpenAI" if stage == "transcribe" else "Anthropic"
+        alert_admin(
+            subject=f"⚠️ תמלול פגישות: נראה שנגמר הקרדיט ({provider})",
+            body=(
+                f"שלב '{stage}' נכשל עם שגיאה שנראית כמו חוסר קרדיט/מכסה.\n"
+                f"שיחות מפסיקות להתמלל עד שתיטען יתרה.\n\n"
+                f"OpenAI: https://platform.openai.com/settings/organization/billing\n"
+                f"Anthropic: https://console.anthropic.com/settings/billing\n\n"
+                f"call_job_id={cj.id}\nשגיאה: {str(exc)[:500]}"
+            ),
+            sms_text=f"⚠️ תמלול פגישות: נראה שנגמר הקרדיט ב-{provider}. שיחות לא מתומללות עד טעינת יתרה.",
+            throttle_key=f"credit:{provider.lower()}",
+        )
+
+    if self.request.retries < self.max_retries:
+        delay = RETRY_BACKOFF_SEC[min(self.request.retries, len(RETRY_BACKOFF_SEC) - 1)]
+        log.warning(
+            "retrying %s in %ss (attempt %d/%d)",
+            stage, delay, self.request.retries + 1, self.max_retries,
+            extra={"call_job_id": cj.id},
+        )
+        raise self.retry(exc=exc, countdown=delay)
+
+    return _fail(db, cj, f"{stage}: {exc}")
+
+
 def _fail(db: Session, cj: CallJob, msg: str) -> dict:
     cj.status = CallJobStatus.failed
     cj.error_message = msg
     cj.completed_at = datetime.utcnow()
     db.commit()
     return {"call_job_id": cj.id, "status": "failed", "error": msg}
+
+
+@celery_app.task(name="phone_calls.reconcile")
+def reconcile_stuck_calls() -> dict:
+    """Self-healing safety net: re-enqueue CallJobs that fell out of the pipeline
+    without reaching a terminal state — `failed` ones, or jobs stuck mid-pipeline
+    after a worker crash. Polling can't recover these because it dedups by
+    ghl_message_id against any existing row. Runs on Celery beat.
+
+    Guards against re-processing a job that may still be running (min-age) and
+    against chasing a permanently-broken call forever (MAX_ATTEMPTS).
+    """
+    now = datetime.utcnow()
+    cutoff_new = now - timedelta(hours=RECONCILE_LOOKBACK_HOURS)
+    cutoff_age = now - timedelta(minutes=RECONCILE_MIN_AGE_MINUTES)
+    db = SessionLocal()
+    requeued = 0
+    gave_up = 0
+    try:
+        stuck = (
+            db.query(CallJob)
+            .filter(
+                CallJob.status.notin_(TERMINAL_STATUSES),
+                CallJob.created_at >= cutoff_new,
+                CallJob.created_at <= cutoff_age,
+            )
+            .all()
+        )
+        for cj in stuck:
+            if cj.attempts >= MAX_ATTEMPTS:
+                gave_up += 1
+                continue
+            log.info(
+                "reconcile: re-enqueue stuck call",
+                extra={"call_job_id": cj.id, "status": cj.status.value, "attempts": cj.attempts},
+            )
+            process_call_job.delay(cj.id)
+            requeued += 1
+    finally:
+        db.close()
+
+    if gave_up:
+        alert_admin(
+            subject=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית",
+            body=(
+                f"{gave_up} שיחות עברו {MAX_ATTEMPTS} ניסיונות ועדיין לא תומללו — "
+                f"צריך בדיקה ידנית (scripts/backfill_calls.py).\n"
+                f"({requeued} שיחות אחרות נשלחו שוב לעיבוד.)"
+            ),
+            sms_text=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית וצריכות בדיקה ידנית.",
+            throttle_key="reconcile-gaveup",
+        )
+
+    summary = {"requeued": requeued, "gave_up": gave_up}
+    log.info("reconcile_stuck_calls done", extra=summary)
+    return summary

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     admin_email: str = "gad@morethan.com"
     resend_api_key: str = ""
+    alert_from_email: str = "alerts@morethan.com"   # must be a Resend-verified sender
+    admin_sms_phone: str = "0548088154"             # GHL contact to SMS on alerts ("" = off)
 
     max_upload_mb: int = 500
     transcript_chunk_minutes: int = 10
@@ -35,6 +37,7 @@ class Settings(BaseSettings):
     celery_task_eager: bool = False
     celery_task_time_limit_sec: int = 60 * 60  # 1h hard limit per task
     ghl_call_poll_interval_seconds: int = 3 * 60 * 60  # 3 hours
+    ghl_call_reconcile_interval_seconds: int = 60 * 60  # 1 hour — re-enqueue stuck calls
 
 
 @lru_cache

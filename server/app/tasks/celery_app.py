@@ -32,5 +32,11 @@ celery_app.conf.update(
             "task": "phone_calls.poll",
             "schedule": settings.ghl_call_poll_interval_seconds,
         },
+        # Self-healing: re-enqueue calls that failed or got stuck mid-pipeline.
+        # Runs between polls so a transient outage recovers without manual backfill.
+        "reconcile-stuck-calls": {
+            "task": "phone_calls.reconcile",
+            "schedule": settings.ghl_call_reconcile_interval_seconds,
+        },
     },
 )
