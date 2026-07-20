@@ -11,7 +11,7 @@ celery_app = Celery(
     "zoom_ghl",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.pipeline", "app.tasks.phone_calls"],
+    include=["app.tasks.pipeline", "app.tasks.phone_calls", "app.tasks.zoom_meetings"],
 )
 
 celery_app.conf.update(

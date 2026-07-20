@@ -104,7 +104,10 @@ class ZoomClient:
         if page_token:
             params["next_page_token"] = page_token
         r = self._client.get(
-            f"/accounts/{self._account_id}/recordings", params=params, headers=self._headers()
+            # "me" — not the literal account id: passing the id makes Zoom read the
+            # call as a master account querying a sub-account and it 400s with
+            # `does not contain scopes:[...:master]`, even when the scope is granted.
+            "/accounts/me/recordings", params=params, headers=self._headers()
         )
         if r.status_code != 200:
             raise ZoomError(f"list_recordings {r.status_code}: {r.text[:300]}")

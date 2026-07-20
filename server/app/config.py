@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     # Participants on these domains are colleagues, never "the customer" — so a
     # teammate who also exists in GHL can't hijack the note. Comma-separated.
     zoom_internal_domains: str = "morethan.com"
+    # The team signs in to Zoom with personal Gmail addresses, so the domain list
+    # above can't recognise them — list those addresses explicitly. Comma-separated.
+    zoom_internal_emails: str = (
+        "gadtamir1301@gmail.com,saarlapid33@gmail.com,"
+        "ruth.morethan@gmail.com,oranitmorethan@gmail.com"
+    )
 
     # --- spec-builder (אפיון + פרומפט בוט) ---
     # Kill switch: set to false to disable spec/bot generation (auto + manual)

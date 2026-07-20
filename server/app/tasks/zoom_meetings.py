@@ -15,7 +15,8 @@ from the transcript — the same signal the desktop-uploader flow has always use
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from ..config import get_settings
@@ -24,6 +25,7 @@ from ..models import ZoomMeeting, ZoomMeetingStatus
 from ..services.anthropic_client import summarize_meeting
 from ..services.ghl_client import GHLClient, GHLError
 from .celery_app import celery_app
+from .ghl import _score_by_appointment, _split_topic_into_candidates
 from .transcribe import transcribe_audio
 
 
@@ -48,10 +50,23 @@ def _internal_domains() -> set[str]:
     return {d.strip().lower() for d in raw.split(",") if d.strip()}
 
 
+def _internal_emails() -> set[str]:
+    raw = get_settings().zoom_internal_emails or ""
+    return {e.strip().lower() for e in raw.split(",") if e.strip()}
+
+
 def _is_external(email: str | None) -> bool:
+    """True only for an address that is neither on a company domain nor a known teammate.
+
+    The team signs in with personal Gmail addresses, so a domain check alone marks
+    colleagues as customers — and the note lands on a teammate's GHL card.
+    """
     if not email or "@" not in email:
         return False
-    return email.rsplit("@", 1)[1].lower() not in _internal_domains()
+    email = email.strip().lower()
+    if email in _internal_emails():
+        return False
+    return email.rsplit("@", 1)[1] not in _internal_domains()
 
 
 def _storage_path(meeting_id: str) -> Path:
@@ -86,20 +101,72 @@ def _external_participant_emails(meeting_uuid: str) -> list[str]:
     return seen
 
 
-def _find_contact(ghl: GHLClient, emails: list[str], fallback_name: str | None) -> tuple[str | None, str | None]:
-    """(contact_id, matched_email). Email match wins; name is the fallback."""
+def _israel_local(dt_utc: datetime | None) -> datetime | None:
+    """Zoom reports UTC; GHL stores appointment times as naive Israel local time.
+
+    Compared naively, every match would be off by the UTC offset — and hardcoding
+    +3 breaks for half the year, so convert through the tz database (IST/IDT).
+    """
+    if dt_utc is None:
+        return None
+    return (
+        dt_utc.replace(tzinfo=timezone.utc)
+        .astimezone(ZoneInfo("Asia/Jerusalem"))
+        .replace(tzinfo=None)
+    )
+
+
+def _find_contact(
+    ghl: GHLClient,
+    emails: list[str],
+    topic: str | None,
+    started_at: datetime | None,
+    fallback_name: str | None,
+) -> tuple[str | None, str | None]:
+    """(contact_id, matched_email) — strongest available signal wins.
+
+    Order matters. An email is proof, but Zoom only reports addresses for people
+    signed in to a Zoom account, and customers join as guests — so in practice the
+    meeting topic carries the name ("<לקוח> + פגישת התאמה : <עובד> - More-Than")
+    and is the signal that actually resolves most meetings. The name Claude pulled
+    out of the transcript stays last: it's a guess about who was speaking.
+
+    A bare first name ("דנה") matches ten contacts and is useless on its own, so
+    ambiguity is resolved the way the desktop-uploader flow does it: whoever had a
+    GHL appointment at the time the meeting started. Observed deltas are 1-2 minutes.
+    """
     for email in emails:
         for c in ghl.search_contacts(query=email, limit=10):
             if (c.get("email") or "").strip().lower() == email.lower():
                 return c.get("id"), email
-    if fallback_name:
-        contacts = ghl.search_contacts(query=fallback_name, limit=10)
+
+    names = _split_topic_into_candidates(topic)
+    if fallback_name and fallback_name not in names:
+        names.append(fallback_name)
+
+    meeting_dt = _israel_local(started_at)
+    ambiguous: dict[str, dict] = {}
+    for name in names:
+        contacts = ghl.search_contacts(query=name, limit=10)
         if len(contacts) == 1:
             return contacts[0].get("id"), None
-        # Several matches on a bare name is a coin flip — better to skip than to
-        # attach a customer's meeting summary to the wrong person.
-        if len(contacts) > 1:
-            log.warning("ambiguous name match, skipping", extra={"name": fallback_name, "n": len(contacts)})
+        for c in contacts:
+            if c.get("id") and c["id"] not in ambiguous:
+                ambiguous[c["id"]] = {"contact": c, "matched_by": name}
+
+    if ambiguous and meeting_dt:
+        cid, delta = _score_by_appointment(ghl, ambiguous, meeting_dt, "zoom")
+        if cid:
+            log.info(
+                "matched by appointment window",
+                extra={"contact_id": cid, "delta_minutes": int(delta.total_seconds() // 60)},
+            )
+            return cid, None
+
+    if ambiguous:
+        # Several matches and no appointment to break the tie is a coin flip —
+        # better to skip than to attach a meeting summary to the wrong customer.
+        log.warning("ambiguous match with no appointment, skipping", extra={"n": len(ambiguous)})
     return None, None
 
 
@@ -179,7 +246,7 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
         try:
             emails = _external_participant_emails(uuid)
             with GHLClient() as ghl:
-                contact_id, matched = _find_contact(ghl, emails, extracted_name)
+                contact_id, matched = _find_contact(ghl, emails, zm.topic, zm.started_at, extracted_name)
                 if not contact_id:
                     zm.status = ZoomMeetingStatus.skipped
                     zm.error_message = "no external GHL contact — treated as internal meeting"
