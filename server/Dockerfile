@@ -14,6 +14,10 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
+# Chromium for the spec-builder PDF renderer (Playwright). Installs the browser
+# plus its OS dependencies into the image.
+RUN python -m playwright install --with-deps chromium
+
 COPY app ./app
 COPY supervisord.conf /etc/supervisor/conf.d/zoom-ghl.conf
 COPY entrypoint.sh ./entrypoint.sh

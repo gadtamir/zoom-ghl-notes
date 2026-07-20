@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .api import jobs as jobs_api
+from .api import spec as spec_api
 from .api import upload as upload_api
 from .config import get_settings
 from .db import Base, engine
@@ -25,6 +26,7 @@ app = FastAPI(
 
 app.include_router(upload_api.router)
 app.include_router(jobs_api.router)
+app.include_router(spec_api.router)
 
 
 @app.get("/health", tags=["meta"])

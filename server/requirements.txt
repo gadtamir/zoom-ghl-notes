@@ -16,3 +16,9 @@ python-json-logger==3.2.1
 tenacity==9.0.0
 typer==0.15.1
 rich==13.9.4
+# spec-builder: branded PDF rendering + Google Drive upload
+jinja2==3.1.5
+playwright==1.49.1
+google-api-python-client==2.157.0
+google-auth==2.37.0
+google-auth-httplib2==0.2.0
