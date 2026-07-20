@@ -18,6 +18,7 @@ def summarize_job(db: Session, job: Job) -> str:
     summary, contact_name = summarize_meeting(
         transcript=job.transcript,
         employee_name=job.employee_name,
+        meeting_topic=job.meeting_topic,
     )
     job.summary = summary
     job.extracted_contact_name = contact_name

@@ -235,7 +235,7 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
             return _retry_or_fail(self, db, zm, "transcribe", exc)
 
         try:
-            summary, extracted_name = summarize_meeting(zm.transcript or "", zm.host_name or "(לא ידוע)")
+            summary, extracted_name = summarize_meeting(zm.transcript or "", zm.host_name or "(לא ידוע)", zm.topic)
             zm.summary = summary
             zm.status = ZoomMeetingStatus.summarized
             db.commit()
