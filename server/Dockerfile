@@ -1,4 +1,8 @@
-FROM python:3.12-slim
+# Pinned to bookworm: the floating `slim` tag has moved on to trixie, where
+# Playwright's `--with-deps` still asks for ttf-unifont / ttf-ubuntu-font-family.
+# Those packages were renamed there, so the browser install aborts and the whole
+# image fails to build.
+FROM python:3.12-slim-bookworm
 
 # Install ffmpeg (needed for media conversion + pydub chunking)
 RUN apt-get update \
