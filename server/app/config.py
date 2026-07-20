@@ -24,6 +24,17 @@ class Settings(BaseSettings):
     ghl_api_base: str = "https://services.leadconnectorhq.com"
     ghl_api_version: str = "2021-07-28"
 
+    # Zoom Server-to-Server OAuth (cloud recordings). Empty = Zoom polling disabled.
+    zoom_account_id: str = ""
+    zoom_client_id: str = ""
+    zoom_client_secret: str = ""
+    # Webhook Only app: signs every event with HMAC. Empty = /webhooks/zoom rejects all.
+    zoom_webhook_secret_token: str = ""
+    zoom_min_duration_minutes: int = 5  # skip meetings shorter than this
+    # Participants on these domains are colleagues, never "the customer" — so a
+    # teammate who also exists in GHL can't hijack the note. Comma-separated.
+    zoom_internal_domains: str = "morethan.com"
+
     # --- spec-builder (אפיון + פרומפט בוט) ---
     # Kill switch: set to false to disable spec/bot generation (auto + manual)
     # WITHOUT affecting the normal transcribe→summarize→note pipeline.
@@ -50,6 +61,8 @@ class Settings(BaseSettings):
     celery_task_time_limit_sec: int = 60 * 60  # 1h hard limit per task
     ghl_call_poll_interval_seconds: int = 3 * 60 * 60  # 3 hours
     ghl_call_reconcile_interval_seconds: int = 60 * 60  # 1 hour — re-enqueue stuck calls
+    zoom_poll_interval_seconds: int = 15 * 60           # 15 minutes — pull new cloud recordings
+    zoom_poll_lookback_hours: int = 48                  # overlap window; dedup is by meeting uuid
 
 
 @lru_cache
