@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     # teammate who also exists in GHL can't hijack the note. Comma-separated.
     zoom_internal_domains: str = "morethan.com"
 
+    # --- spec-builder (אפיון + פרומפט בוט) ---
+    # Kill switch: set to false to disable spec/bot generation (auto + manual)
+    # WITHOUT affecting the normal transcribe→summarize→note pipeline.
+    spec_builder_enabled: bool = True
+    # Google Drive (Oranit's account) for uploading bot prompts + spec PDFs.
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_refresh_token: str = ""
+    gdrive_parent_folder_id: str = ""       # parent folder that holds per-client folders
+    # Shared secret protecting the manual spec-builder web page (/spec/ui).
+    spec_ui_token: str = ""
+
     admin_email: str = "gad@morethan.com"
     resend_api_key: str = ""
     alert_from_email: str = "alerts@morethan.com"   # must be a Resend-verified sender

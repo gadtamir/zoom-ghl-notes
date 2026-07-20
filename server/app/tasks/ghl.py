@@ -111,11 +111,14 @@ def _parse_ghl_datetime(value: str | None) -> datetime | None:
     return None
 
 
-def _format_note(job: Job) -> str:
+def _format_note(job: Job, extra_note: str | None = None) -> str:
     date_display = job.meeting_date or job.created_at.strftime("%Y-%m-%d")
     title = f"📞 סיכום פגישת זום - {date_display} - הועלה ע\"י {job.employee_name}"
     body = job.summary or "(אין סיכום זמין)"
-    return f"{title}\n\n{body}"
+    note = f"{title}\n\n{body}"
+    if extra_note:
+        note += f"\n\n{'—' * 20}\n\n{extra_note}"
+    return note
 
 
 def _gather_candidates(ghl: GHLClient, queries: list[str], job_id: str) -> dict[str, dict]:
@@ -195,8 +198,12 @@ def _score_by_appointment(
     return best_id, best_delta
 
 
-def attach_note(db: Session, job: Job) -> JobStatus:
-    """Find contact via folder-split + calendar-aware scoring, create Note."""
+def attach_note(db: Session, job: Job, extra_note: str | None = None) -> JobStatus:
+    """Find contact via folder-split + calendar-aware scoring, create Note.
+
+    `extra_note` (e.g. the generated spec text + Drive links) is appended to the
+    note body when present.
+    """
     queries = _candidate_queries(job)
     if not queries:
         log.warning("no search candidates for job", extra={"job_id": job.id})
@@ -264,7 +271,7 @@ def attach_note(db: Session, job: Job) -> JobStatus:
             },
         )
 
-        note = ghl.create_note(contact_id=chosen_id, body=_format_note(job))
+        note = ghl.create_note(contact_id=chosen_id, body=_format_note(job, extra_note))
         note_id = note.get("id")
 
         job.ghl_contact_id = chosen_id

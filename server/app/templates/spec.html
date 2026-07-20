@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>{{ spec.title | default("מסמך אפיון לקוח") }} · {{ spec.client_name }}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap');
+
+  :root {
+    /* Default accent = blue (רוית / פולוג'וי). Gold variant set via body.gold. */
+    --accent: #2f5fd6;
+    --accent-soft: #eaf0fd;
+    --navy: #1e2a44;
+    --ink: #24303f;
+    --muted: #7a8494;
+    --line: #e5e8ee;
+    --page-bg: #ffffff;
+  }
+  body.gold {
+    --accent: #b08838;
+    --accent-soft: #f6efe0;
+    --navy: #1e2a44;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Heebo', 'Segoe UI', Arial, sans-serif;
+    color: var(--ink);
+    background: var(--page-bg);
+    font-size: 14px;
+    line-height: 1.7;
+    direction: rtl;
+  }
+
+  @page {
+    size: A4;
+    margin: 20mm 16mm 18mm 16mm;
+    @bottom-center {
+      content: "מסמך אפיון לקוח · More-Than · עמוד " counter(page) " מתוך " counter(pages);
+      font-family: 'Heebo', Arial, sans-serif;
+      font-size: 9px;
+      color: #aab2c0;
+    }
+  }
+
+  /* ---------- Header ---------- */
+  .brandbar {
+    display: flex;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 3px solid var(--navy);
+    padding-bottom: 10px;
+    margin-bottom: 26px;
+  }
+  .brandbar .badge {
+    background: var(--navy);
+    color: #fff;
+    width: 26px; height: 26px;
+    border-radius: 7px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 13px;
+  }
+  .brandbar .brandtext {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: .2px;
+  }
+
+  h1.doctitle {
+    font-size: 34px;
+    font-weight: 800;
+    margin: 0 0 6px;
+    color: var(--navy);
+  }
+  .subtitle {
+    font-size: 16px;
+    color: var(--muted);
+    margin: 0 0 22px;
+  }
+
+  /* ---------- Meta box ---------- */
+  .meta {
+    display: flex;
+    gap: 0;
+    background: #f6f7f9;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+    margin-bottom: 22px;
+  }
+  .meta .cell {
+    flex: 1;
+    padding: 14px 18px;
+    border-left: 1px solid var(--line);
+  }
+  .meta .cell:last-child { border-left: none; }
+  .meta .k { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .meta .v { font-size: 15px; font-weight: 700; color: var(--navy); }
+
+  /* ---------- Intro ---------- */
+  .intro {
+    background: var(--accent-soft);
+    border-radius: 12px;
+    padding: 16px 20px;
+    font-size: 14px;
+    line-height: 1.8;
+    margin-bottom: 30px;
+  }
+
+  /* ---------- Sections ---------- */
+  .section { margin-bottom: 26px; }
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 8px;
+    margin-bottom: 14px;
+  }
+  .section-head .num {
+    background: var(--accent);
+    color: #fff;
+    min-width: 26px; height: 26px;
+    border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 13px;
+    padding: 0 4px;
+  }
+  .section-head h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 800;
+    color: var(--navy);
+  }
+  .subhead {
+    font-weight: 700;
+    color: var(--navy);
+    margin: 14px 0 8px;
+    font-size: 14.5px;
+  }
+
+  /* ---------- Bullets ---------- */
+  ul.bullets { list-style: none; margin: 0; padding: 0; }
+  ul.bullets li {
+    position: relative;
+    padding-right: 16px;
+    margin-bottom: 7px;
+  }
+  ul.bullets li::before {
+    content: "•";
+    color: var(--accent);
+    position: absolute;
+    right: 0;
+    font-weight: 800;
+  }
+  ul.bullets li .lead { font-weight: 700; color: var(--navy); }
+
+  /* ---------- Numbered steps ---------- */
+  ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  ol.steps li {
+    position: relative;
+    padding-right: 34px;
+    margin-bottom: 10px;
+    min-height: 24px;
+  }
+  ol.steps li::before {
+    counter-increment: step;
+    content: counter(step);
+    position: absolute; right: 0; top: 0;
+    background: var(--accent);
+    color: #fff;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+  ol.steps li .lead { font-weight: 700; color: var(--navy); }
+
+  p.para { margin: 0 0 10px; }
+
+  /* ---------- Callout ---------- */
+  .callout {
+    background: #f6f7f9;
+    border-right: 3px solid var(--accent);
+    border-radius: 8px;
+    padding: 10px 16px;
+    color: #55606f;
+    font-size: 13px;
+    margin: 12px 0;
+  }
+
+  /* ---------- Pills ---------- */
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
+  .pill {
+    border: 1px solid var(--accent);
+    color: var(--navy);
+    border-radius: 999px;
+    padding: 5px 14px;
+    font-size: 12.5px;
+    font-weight: 600;
+    background: #fff;
+  }
+
+  /* ---------- Table ---------- */
+  table.data {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0;
+    font-size: 13px;
+    overflow: hidden;
+    border-radius: 10px;
+  }
+  table.data thead th {
+    background: var(--navy);
+    color: #fff;
+    font-weight: 700;
+    padding: 11px 14px;
+    text-align: right;
+  }
+  table.data tbody td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    text-align: right;
+  }
+  table.data tbody tr:nth-child(even) { background: #fafbfc; }
+  table.data tbody tr:last-child td { border-bottom: none; }
+  .cell-flag { color: #c0392b; font-weight: 600; }
+
+  /* ---------- Cards ---------- */
+  .cards { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
+  .card {
+    flex: 1;
+    min-width: 200px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .card.dark { background: var(--navy); color: #fff; border: none; }
+  .card .tag {
+    display: inline-block;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-radius: 999px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .card .ctitle { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
+  .card .cnote { color: var(--muted); font-size: 12px; }
+  .card.dark .cnote { color: #b9c2d4; }
+  .card .cvalue { font-size: 22px; font-weight: 800; color: var(--navy); }
+  .card.dark .cvalue { color: #fff; }
+
+  .footer-note {
+    margin-top: 30px;
+    padding-top: 14px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .avoid-break { break-inside: avoid; }
+</style>
+</head>
+<body class="{{ 'gold' if spec.accent == 'gold' else '' }}">
+
+  <div class="brandbar">
+    <span class="badge">M</span>
+    <span class="brandtext">MORE-THAN · מערכת CRM ואוטומציה</span>
+  </div>
+
+  <h1 class="doctitle">{{ spec.title | default("מסמך אפיון לקוח") }}</h1>
+  {% if spec.subtitle %}<div class="subtitle">{{ spec.subtitle }}</div>{% endif %}
+
+  <div class="meta">
+    <div class="cell"><div class="k">לקוח</div><div class="v">{{ spec.client_name }}</div></div>
+    {% if spec.domain %}<div class="cell"><div class="k">תחום</div><div class="v">{{ spec.domain }}</div></div>{% endif %}
+    <div class="cell"><div class="k">סוג מסמך</div><div class="v">{{ spec.doc_type | default("אפיון צרכים") }}</div></div>
+  </div>
+
+  {% if spec.intro %}<div class="intro">{{ spec.intro }}</div>{% endif %}
+
+  {% for section in spec.sections %}
+  <div class="section">
+    <div class="section-head">
+      <span class="num">{{ section.number }}</span>
+      <h2>{{ section.title }}</h2>
+    </div>
+
+    {% for block in section.blocks %}
+      {% if block.subhead %}<div class="subhead">{{ block.subhead }}</div>{% endif %}
+
+      {% if block.type == "paragraph" %}
+        <p class="para">{{ block.text }}</p>
+
+      {% elif block.type == "bullets" %}
+        <ul class="bullets">
+          {% for item in block.items %}
+          <li>{% if item.lead %}<span class="lead">{{ item.lead }}:</span> {% endif %}{{ item.text }}</li>
+          {% endfor %}
+        </ul>
+
+      {% elif block.type == "steps" %}
+        <ol class="steps">
+          {% for item in block.items %}
+          <li>{% if item.lead %}<span class="lead">{{ item.lead }}</span> — {% endif %}{{ item.text }}</li>
+          {% endfor %}
+        </ol>
+
+      {% elif block.type == "callout" %}
+        <div class="callout">{{ block.text }}</div>
+
+      {% elif block.type == "pills" %}
+        <div class="pills">
+          {% for p in block.items %}<span class="pill">{{ p.label or p.text or p }}</span>{% endfor %}
+        </div>
+
+      {% elif block.type == "table" %}
+        <table class="data avoid-break">
+          <thead><tr>{% for h in block.headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+          <tbody>
+            {% for row in block.rows %}
+            <tr>{% for cell in row %}<td{% if cell.flag %} class="cell-flag"{% endif %}>{{ cell.text if cell.text else cell }}</td>{% endfor %}</tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+      {% elif block.type == "cards" %}
+        <div class="cards">
+          {% for c in block.items %}
+          <div class="card {{ 'dark' if c.dark else '' }} avoid-break">
+            {% if c.tag %}<span class="tag">{{ c.tag }}</span>{% endif %}
+            {% if c.title %}<div class="ctitle">{{ c.title }}</div>{% endif %}
+            {% if c.value %}<div class="cvalue">{{ c.value }}</div>{% endif %}
+            {% if c.note %}<div class="cnote">{{ c.note }}</div>{% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+  {% endfor %}
+
+  {% if spec.footer_note %}<div class="footer-note">{{ spec.footer_note }}</div>{% endif %}
+
+</body>
+</html>

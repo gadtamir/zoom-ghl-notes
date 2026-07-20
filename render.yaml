@@ -61,3 +61,17 @@ services:
         sync: false
       - key: RESEND_API_KEY
         sync: false
+      # spec-builder (אפיון + פרומפט בוט)
+      - key: SPEC_BUILDER_ENABLED   # kill switch: set to "false" to disable generation
+        value: "true"
+      # set in Render dashboard:
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REFRESH_TOKEN
+        sync: false
+      - key: GDRIVE_PARENT_FOLDER_ID
+        sync: false
+      - key: SPEC_UI_TOKEN
+        sync: false

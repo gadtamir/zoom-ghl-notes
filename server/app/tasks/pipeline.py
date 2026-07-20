@@ -18,6 +18,7 @@ from ..models import Job, JobStatus
 from .celery_app import celery_app
 from .ghl import attach_note
 from .media import is_audio, is_video, video_to_audio
+from .spec_stage import build_for_job, is_spec_meeting
 from .summarize import summarize_job
 from .transcribe import transcribe_audio
 
@@ -81,8 +82,17 @@ def run_pipeline(self, job_id: str) -> dict:
             _set_status(db, job, JobStatus.failed)
             return {"job_id": job_id, "status": "failed", "stage": "summarize"}
 
+        # Spec-builder: only for discovery meetings. Best-effort — never fails the pipeline.
+        extra_note: str | None = None
+        if get_settings().spec_builder_enabled and is_spec_meeting(job.meeting_topic):
+            log.info("spec meeting detected — building spec + bot prompt", extra={"job_id": job_id})
+            spec_result = build_for_job(db, job, upload=True)
+            extra_note = spec_result.get("note_addition")
+            if not spec_result.get("ok"):
+                log.warning("spec build incomplete", extra={"job_id": job_id, "error": spec_result.get("error")})
+
         try:
-            final = attach_note(db, job)
+            final = attach_note(db, job, extra_note=extra_note)
         except Exception as exc:
             log.exception("ghl failed", extra={"job_id": job_id})
             job.error_message = f"ghl: {exc}"
