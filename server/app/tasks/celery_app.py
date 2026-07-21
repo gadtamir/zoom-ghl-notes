@@ -38,5 +38,10 @@ celery_app.conf.update(
             "task": "phone_calls.reconcile",
             "schedule": settings.ghl_call_reconcile_interval_seconds,
         },
+        # Delete Zoom cloud recordings once past their retention window.
+        "cleanup-zoom-recordings": {
+            "task": "zoom_meetings.cleanup_recordings",
+            "schedule": settings.zoom_cleanup_interval_seconds,
+        },
     },
 )

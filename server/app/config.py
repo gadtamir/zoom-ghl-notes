@@ -40,6 +40,12 @@ class Settings(BaseSettings):
         "gadtamir1301@gmail.com,saarlapid33@gmail.com,"
         "ruth.morethan@gmail.com,oranitmorethan@gmail.com"
     )
+    # Cloud storage is capped, so processed recordings are deleted from Zoom — but
+    # only after a grace window, so a call worth keeping (e.g. a closed deal) can
+    # be saved first. Deletion goes to Zoom's trash, itself recoverable ~30 days.
+    # 0 (or negative) disables auto-deletion entirely.
+    zoom_recording_retention_days: int = 30
+    zoom_cleanup_interval_seconds: int = 24 * 60 * 60  # sweep once a day
 
     # --- spec-builder (אפיון + פרומפט בוט) ---
     # Kill switch: set to false to disable spec/bot generation (auto + manual)
