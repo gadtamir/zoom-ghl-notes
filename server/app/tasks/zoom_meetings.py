@@ -16,7 +16,7 @@ from the transcript — the same signal the desktop-uploader flow has always use
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
 
