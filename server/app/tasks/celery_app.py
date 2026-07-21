@@ -38,6 +38,11 @@ celery_app.conf.update(
             "task": "phone_calls.reconcile",
             "schedule": settings.ghl_call_reconcile_interval_seconds,
         },
+        # Safety net: re-discover cloud recordings a dropped webhook would miss.
+        "poll-zoom-recordings": {
+            "task": "zoom_meetings.poll",
+            "schedule": settings.zoom_poll_interval_seconds,
+        },
         # Delete Zoom cloud recordings once past their retention window.
         "cleanup-zoom-recordings": {
             "task": "zoom_meetings.cleanup_recordings",

@@ -294,6 +294,54 @@ def _retry_or_fail(self, db, zm: ZoomMeeting, stage: str, exc: Exception) -> dic
     return {"meeting": zm.zoom_meeting_uuid, "status": "failed", "error": f"{stage}: {exc}"}
 
 
+@celery_app.task(name="zoom_meetings.poll")
+def poll_recordings() -> dict:
+    """Safety net: pull recent cloud recordings and enqueue any we haven't done.
+
+    The webhook is the primary path, but a dropped delivery or a worker that dies
+    mid-task (as happened on the very first real recording) leaves a recording
+    that no event will ever re-announce — Zoom considers a 200-acked webhook done.
+    This sweep re-discovers those: it lists the last `zoom_poll_lookback_hours` and
+    enqueues anything with no terminal row yet. `process_zoom_recording` dedupes on
+    the meeting uuid, so re-enqueuing one already in flight is harmless.
+
+    No webhook download_token here, so we pass an OAuth access token instead — it
+    authorises the same file download for an account-level app.
+    """
+    settings = get_settings()
+    if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
+        return {"status": "no_credentials"}
+
+    from ..services.zoom_client import ZoomClient
+
+    since = datetime.utcnow() - timedelta(hours=settings.zoom_poll_lookback_hours)
+    db = SessionLocal()
+    queued = 0
+    try:
+        with ZoomClient() as zoom:
+            meetings = zoom.list_recordings(since=since)
+            token = zoom._access_token()
+        done = {
+            row.zoom_meeting_uuid
+            for row in db.query(ZoomMeeting.zoom_meeting_uuid)
+            .filter(ZoomMeeting.status.in_(TERMINAL))
+            .all()
+        }
+        for m in meetings:
+            uuid = m.get("uuid") or ""
+            if not uuid or uuid in done:
+                continue
+            process_zoom_recording.delay(m, token)
+            queued += 1
+        log.info(
+            "zoom poll done",
+            extra={"listed": len(meetings), "queued": queued, "lookback_hours": settings.zoom_poll_lookback_hours},
+        )
+        return {"status": "ok", "listed": len(meetings), "queued": queued}
+    finally:
+        db.close()
+
+
 @celery_app.task(name="zoom_meetings.cleanup_recordings")
 def cleanup_recordings() -> dict:
     """Delete Zoom cloud recordings we've finished with, after a retention window.
