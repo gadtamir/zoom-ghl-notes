@@ -131,33 +131,48 @@ def _match_by_calendar(
     We look at the host's own calendar, matching first on the embedded Zoom id
     and only then, if the URL can't be read, on the closest event by time.
     """
-    if not (host_email and zoom_meeting_id and started_at):
+    if not (zoom_meeting_id and started_at):
         return None
     # started_at is UTC (naive); epoch is absolute, so no tz juggling is needed
     # for the query window or the fallback delta.
     center = int(started_at.replace(tzinfo=timezone.utc).timestamp() * 1000)
+    window_ms = 12 * 60 * 60 * 1000
     try:
-        user_id = next(
-            (u.get("id") for u in ghl.list_users()
-             if (u.get("email") or "").strip().lower() == host_email.strip().lower()),
-            None,
-        )
-        if not user_id:
-            return None
-        window_ms = 12 * 60 * 60 * 1000
-        events = ghl.calendar_events(user_id, center - window_ms, center + window_ms)
+        users = ghl.list_users()
     except Exception as exc:  # noqa: BLE001 — matching must never break the pipeline
         log.warning("calendar match failed, falling back: %s", str(exc)[:200])
         return None
 
-    for e in events:
-        m = _ZOOM_ID_IN_URL.search(e.get("address") or "")
-        if m and m.group(1) == str(zoom_meeting_id) and e.get("contactId"):
-            return e["contactId"]
+    # The Zoom meeting id is globally unique but the booking lives on whichever
+    # teammate's calendar owns the appointment — not necessarily the one who
+    # hosted the recording. So scan the team, host first (the common case, so it
+    # usually resolves on the first call), then the rest.
+    def _rank(u: dict) -> int:
+        same = host_email and (u.get("email") or "").strip().lower() == host_email.strip().lower()
+        return 0 if same else 1
 
-    # No id match (URL missing/edited) — fall back to the single closest event.
+    host_events: list[dict] = []
+    for u in sorted(users, key=_rank):
+        uid = u.get("id")
+        if not uid:
+            continue
+        try:
+            events = ghl.calendar_events(uid, center - window_ms, center + window_ms)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("calendar_events failed for one user: %s", str(exc)[:150])
+            continue
+        for e in events:
+            m = _ZOOM_ID_IN_URL.search(e.get("address") or "")
+            if m and m.group(1) == str(zoom_meeting_id) and e.get("contactId"):
+                return e["contactId"]
+        if _rank(u) == 0:
+            host_events = events  # keep for the time-based fallback below
+
+    # No id match anywhere (URL edited/missing). Fall back to the single closest
+    # event, but only on the host's own calendar — a same-time event on someone
+    # else's calendar would be a coincidence, not this meeting.
     best_id, best_delta = None, None
-    for e in events:
+    for e in host_events:
         try:
             ev_ms = datetime.fromisoformat(e["startTime"]).timestamp() * 1000
         except (KeyError, ValueError):
