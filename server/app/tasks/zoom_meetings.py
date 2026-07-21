@@ -192,7 +192,10 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                 status=ZoomMeetingStatus.received,
             )
             db.add(zm)
-        zm.attempts += 1
+        # A freshly-constructed row hasn't been flushed yet, so the column
+        # default (0) has not been applied and zm.attempts is still None here —
+        # `None += 1` is what crashed the very first real recording. Coalesce.
+        zm.attempts = (zm.attempts or 0) + 1
         db.commit()
 
         if zm.duration_minutes < settings.zoom_min_duration_minutes:
