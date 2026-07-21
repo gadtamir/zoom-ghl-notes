@@ -67,6 +67,43 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
+    def list_users(self) -> list[dict[str, Any]]:
+        """Location users (staff). Used to map a meeting host's email to a userId."""
+        r = self._client.get("/users/", params={"locationId": self._location_id})
+        if r.status_code != 200:
+            raise GHLError(f"list_users {r.status_code}: {r.text[:300]}")
+        return r.json().get("users", [])
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def calendar_events(self, user_id: str, start_ms: int, end_ms: int) -> list[dict[str, Any]]:
+        """A user's calendar events in [start_ms, end_ms] (epoch millis).
+
+        Each event carries a `contactId` and, for our bookings, the Zoom join URL
+        in `address` — so a recording's meeting id resolves straight to a contact,
+        with no name lookup and no ambiguity.
+        """
+        params = {
+            "locationId": self._location_id,
+            "userId": user_id,
+            "startTime": str(start_ms),
+            "endTime": str(end_ms),
+        }
+        r = self._client.get("/calendars/events", params=params)
+        if r.status_code != 200:
+            raise GHLError(f"calendar_events {r.status_code}: {r.text[:300]}")
+        return r.json().get("events", [])
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
     def get_contact_appointments(self, contact_id: str) -> list[dict[str, Any]]:
         """Return all appointments (calendar events) attached to this contact."""
         r = self._client.get(f"/contacts/{contact_id}/appointments/")
