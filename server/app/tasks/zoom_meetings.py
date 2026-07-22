@@ -81,6 +81,78 @@ def _format_note(zm: ZoomMeeting) -> str:
     return f"{title}\n\n{zm.summary or '(אין סיכום זמין)'}"
 
 
+# GHL rejects a note body over 65,000 characters ("body must be shorter than or
+# equal to 65000 characters"). Leave room for the title/part header we prepend.
+NOTE_MAX_CHARS = 65000
+TRANSCRIPT_BODY_BUDGET = NOTE_MAX_CHARS - 500
+
+
+def _paragraphize(text: str) -> str:
+    """Break a wall of transcript into readable paragraphs.
+
+    The transcriber returns continuous prose with no speaker labels, which is
+    painful to skim in a CRM card. Rather than pay an LLM to reformat, group a
+    few sentences at a time — enough structure to scan, no risk of altering what
+    was actually said.
+    """
+    parts = re.split(r"(?<=[.!?…])\s+", (text or "").strip())
+    sentences = [p.strip() for p in parts if p.strip()]
+    if not sentences:
+        return (text or "").strip()
+    paragraphs, buf = [], []
+    for s in sentences:
+        buf.append(s)
+        if len(buf) >= 4:
+            paragraphs.append(" ".join(buf))
+            buf = []
+    if buf:
+        paragraphs.append(" ".join(buf))
+    return "\n\n".join(paragraphs)
+
+
+def _split_for_notes(body: str, budget: int = TRANSCRIPT_BODY_BUDGET) -> list[str]:
+    """Chunk text to fit GHL's per-note limit, breaking on paragraph boundaries.
+
+    A single paragraph longer than the budget (rare, but possible when the
+    transcriber emits no sentence punctuation at all) is hard-split so we never
+    loop forever or exceed the limit.
+    """
+    if len(body) <= budget:
+        return [body]
+    chunks: list[str] = []
+    current = ""
+    for para in body.split("\n\n"):
+        while len(para) > budget:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(para[:budget])
+            para = para[budget:]
+        candidate = f"{current}\n\n{para}" if current else para
+        if len(candidate) > budget:
+            chunks.append(current)
+            current = para
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _transcript_notes(zm: ZoomMeeting) -> list[str]:
+    """Full-transcript note bodies to attach after the summary (empty if none)."""
+    if not (zm.transcript or "").strip():
+        return []
+    when = zm.started_at.strftime("%Y-%m-%d %H:%M") if zm.started_at else "?"
+    chunks = _split_for_notes(_paragraphize(zm.transcript))
+    total = len(chunks)
+    bodies = []
+    for i, chunk in enumerate(chunks, start=1):
+        suffix = f" (חלק {i}/{total})" if total > 1 else ""
+        bodies.append(f"📝 תמלול מלא - פגישת זום {when}{suffix}\n\n{chunk}")
+    return bodies
+
+
 def _external_participant_emails(meeting_uuid: str) -> list[str]:
     """External attendee addresses, or [] when we can't ask Zoom (webhook-only app)."""
     settings = get_settings()
@@ -337,7 +409,20 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                 zm.ghl_contact_id = contact_id
                 zm.matched_email = matched
                 note = ghl.create_note(contact_id=contact_id, body=_format_note(zm))
-            zm.ghl_note_id = note.get("id")
+                zm.ghl_note_id = note.get("id")
+                # The full transcript follows the summary as its own note(s), so
+                # the readable summary stays the first thing on the card. Best
+                # effort: the summary is the deliverable, and losing the raw
+                # transcript must never fail an otherwise-successful meeting.
+                for body in _transcript_notes(zm):
+                    try:
+                        ghl.create_note(contact_id=contact_id, body=body)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "transcript note failed — summary already attached",
+                            extra={"meeting": uuid, "contact": contact_id, "err": str(exc)[:200]},
+                        )
+                        break
             zm.status = ZoomMeetingStatus.completed
             zm.completed_at = datetime.utcnow()
             db.commit()
