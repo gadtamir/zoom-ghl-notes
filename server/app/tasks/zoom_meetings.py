@@ -27,6 +27,7 @@ from ..services.anthropic_client import summarize_meeting
 from ..services.ghl_client import GHLClient, GHLError
 from .celery_app import celery_app
 from .ghl import _score_by_appointment, _split_topic_into_candidates
+from .spec_stage import build_and_deliver_to_ghl, is_spec_meeting
 from .transcribe import transcribe_audio
 
 
@@ -423,6 +424,29 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                             extra={"meeting": uuid, "contact": contact_id, "err": str(exc)[:200]},
                         )
                         break
+
+                # --- discovery meeting? build the spec doc + push the PDF into GHL.
+                # Best-effort and self-contained: any failure (incl. a GHL write
+                # error) is swallowed here so it never reaches the outer GHLError
+                # handler, which would retry the whole meeting and double the notes.
+                if settings.spec_builder_enabled and is_spec_meeting(zm.topic):
+                    log.info("spec meeting — building spec + attaching PDF to GHL",
+                             extra={"meeting": uuid, "contact": contact_id})
+                    try:
+                        spec_res = build_and_deliver_to_ghl(
+                            ghl, contact_id, zm.transcript or "",
+                            client_name=extracted_name or None,
+                            employee_name=zm.host_name,
+                            date=(zm.started_at or datetime.utcnow()).strftime("%Y-%m-%d"),
+                        )
+                        if spec_res.get("note_addition"):
+                            ghl.create_note(contact_id=contact_id, body=spec_res["note_addition"])
+                        if not spec_res.get("ok"):
+                            log.warning("spec build incomplete",
+                                        extra={"meeting": uuid, "error": spec_res.get("error")})
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("spec stage failed — summary already attached",
+                                    extra={"meeting": uuid, "err": str(exc)[:200]})
             zm.status = ZoomMeetingStatus.completed
             zm.completed_at = datetime.utcnow()
             db.commit()

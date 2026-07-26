@@ -39,6 +39,75 @@ def _client_name(job: Job) -> str | None:
     return None
 
 
+# Name of the location's FILE_UPLOAD custom field the spec PDF is attached to.
+# Resolved by name at runtime (see GHLClient.find_custom_field) so no id is hardcoded.
+SPEC_FILE_FIELD_NAME = "מסמך אפיון"
+
+
+def build_and_deliver_to_ghl(
+    ghl,
+    contact_id: str,
+    transcript: str,
+    client_name: str | None,
+    employee_name: str | None,
+    date: str,
+) -> dict:
+    """Generate the spec for a discovery meeting and deliver it into GHL:
+    render a branded PDF, upload it to the GHL Media Library, attach it to the
+    contact's file field, and return the spec text to append to the note.
+
+    Best-effort throughout — never raises. The guaranteed deliverable is the spec
+    **text** (`note_addition`); the PDF-in-GHL is layered on top and any failure
+    there is logged and swallowed so a completed meeting is never lost.
+    """
+    result: dict = {"ok": False, "note_addition": None, "media_url": None, "error": None}
+    if not (transcript or "").strip():
+        result["error"] = "no transcript"
+        return result
+
+    try:
+        spec = spec_client.generate_spec(
+            transcript=transcript, client_name=client_name,
+            employee_name=employee_name, meeting_date=date,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("spec generation failed", extra={"contact": contact_id})
+        result["error"] = f"generation: {exc}"
+        return result
+
+    resolved_name = spec.get("client_name") or client_name or "לקוח"
+    note_lines = [f"📄 אפיון — {resolved_name} — {date}", "", spec_to_text(spec)]
+    result["spec"] = spec
+
+    # --- PDF → GHL media → attach to the contact's file field (all best-effort) ---
+    try:
+        pdf = spec_render.render_spec_pdf(spec)
+        filename = f"אפיון - {resolved_name} - {date}.pdf"
+        uploaded = ghl.upload_media(filename, pdf, "application/pdf")
+        url = ghl.media_url(uploaded)
+        result["media_url"] = url
+        if url:
+            note_lines += ["", f"📎 מסמך אפיון (PDF): {url}"]
+            try:
+                field = ghl.find_custom_field(SPEC_FILE_FIELD_NAME, data_type="FILE_UPLOAD")
+                if field:
+                    ghl.set_contact_custom_field(contact_id, field["id"], url)
+                else:
+                    log.info("spec file field %r not found — PDF linked in note only",
+                             SPEC_FILE_FIELD_NAME, extra={"contact": contact_id})
+            except Exception as exc:  # noqa: BLE001 — attaching to the field is a bonus
+                log.warning("spec PDF field attach failed (linked in note instead): %s",
+                            str(exc)[:200], extra={"contact": contact_id})
+    except Exception as exc:  # noqa: BLE001 — PDF is a bonus; the text note still delivers
+        log.exception("spec PDF render/upload failed — text note still delivered",
+                      extra={"contact": contact_id})
+        result["error"] = f"pdf: {exc}"
+
+    result["ok"] = True
+    result["note_addition"] = "\n".join(note_lines).strip()
+    return result
+
+
 def _meeting_date(job: Job) -> str:
     return job.meeting_date or job.created_at.strftime("%Y-%m-%d")
 

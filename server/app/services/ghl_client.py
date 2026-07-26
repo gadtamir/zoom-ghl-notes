@@ -273,6 +273,67 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
+    def upload_media(
+        self, filename: str, content: bytes, content_type: str = "application/pdf"
+    ) -> dict[str, Any]:
+        """Upload a file to the location's Media Library. Returns the API object
+        (carries the hosted file URL under `url`/`fileUrl` and an id under
+        `fileId`/`_id`). Multipart, so the JSON `Accept` header is fine but the
+        client's default content-type must not be forced — httpx sets the
+        multipart boundary itself when `files=` is passed.
+        """
+        r = self._client.post(
+            "/medias/upload-file",
+            files={"file": (filename, content, content_type)},
+        )
+        if r.status_code not in (200, 201):
+            raise GHLError(f"upload_media {r.status_code}: {r.text[:300]}")
+        return r.json()
+
+    @staticmethod
+    def media_url(uploaded: dict[str, Any]) -> str | None:
+        """Best-effort hosted URL from an upload_media() response."""
+        return uploaded.get("url") or uploaded.get("fileUrl") or uploaded.get("link")
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def find_custom_field(self, name: str, data_type: str | None = None) -> dict[str, Any] | None:
+        """Return the location custom field matching `name` (and `data_type` if
+        given), or None. Used to resolve the 'מסמך אפיון' file field without
+        hardcoding its id."""
+        r = self._client.get(f"/locations/{self._location_id}/customFields")
+        if r.status_code != 200:
+            raise GHLError(f"custom_fields {r.status_code}: {r.text[:200]}")
+        for f in r.json().get("customFields", []):
+            if f.get("name") == name and (data_type is None or f.get("dataType") == data_type):
+                return f
+        return None
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def set_contact_custom_field(self, contact_id: str, field_id: str, value: Any) -> dict[str, Any]:
+        """Set one custom field on a contact (PUT /contacts/{id}). `value` shape
+        depends on the field's dataType — a bare URL string for FILE_UPLOAD."""
+        payload = {"customFields": [{"id": field_id, "field_value": value}]}
+        r = self._client.put(f"/contacts/{contact_id}", json=payload)
+        if r.status_code not in (200, 201):
+            raise GHLError(f"set_custom_field {r.status_code}: {r.text[:300]}")
+        return r.json()
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
     def send_sms(self, contact_id: str, message: str) -> dict[str, Any]:
         """Send an SMS to a contact via the conversations API.
 
