@@ -39,9 +39,101 @@ def _client_name(job: Job) -> str | None:
     return None
 
 
-# Name of the location's FILE_UPLOAD custom field the spec PDF is attached to.
-# Resolved by name at runtime (see GHLClient.find_custom_field) so no id is hardcoded.
+# Location FILE_UPLOAD custom fields the PDFs attach to. Resolved by name at
+# runtime (GHLClient.find_custom_field) so no ids are hardcoded.
 SPEC_FILE_FIELD_NAME = "מסמך אפיון"
+BOT_FILE_FIELD_NAME = "פרומפט בוט"
+
+
+def _upload_pdf_and_attach(ghl, contact_id: str, pdf: bytes, filename: str, field_name: str) -> str | None:
+    """Upload a PDF to GHL media and attach it to the contact's `field_name` file
+    field. Returns the hosted URL (or None). Attaching is best-effort — a missing
+    field or a failed attach just means the URL is linked in the note instead."""
+    url = ghl.media_url(ghl.upload_media(filename, pdf, "application/pdf"))
+    if not url:
+        return None
+    try:
+        field = ghl.find_custom_field(field_name, data_type="FILE_UPLOAD")
+        if field:
+            ghl.set_contact_custom_field(contact_id, field["id"], url)
+        else:
+            log.info("file field %r not found — linked in note only", field_name,
+                     extra={"contact": contact_id})
+    except Exception as exc:  # noqa: BLE001 — attaching to the field is a bonus
+        log.warning("PDF field attach failed (linked in note instead): %s",
+                    str(exc)[:200], extra={"contact": contact_id})
+    return url
+
+
+def _bot_to_spec_dict(bot: dict, client_name: str, date: str) -> dict:
+    """Shape a generate_bot_prompt() dict into the branded-PDF spec schema so the
+    bot prompt renders through the same template as the spec doc (accent=gold to
+    distinguish it)."""
+    sections = [
+        {"number": 1, "title": "אישיות", "blocks": [{"type": "paragraph", "text": (bot.get("personality") or "").strip()}]},
+        {"number": 2, "title": "מטרה", "blocks": [{"type": "paragraph", "text": (bot.get("goal") or "").strip()}]},
+        {"number": 3, "title": "מידע נוסף", "blocks": [{"type": "paragraph", "text": (bot.get("extra_info") or "").strip()}]},
+    ]
+    kbs = [kb for kb in (bot.get("knowledge_bases") or []) if (kb.get("content") or "").strip()]
+    if kbs:
+        sections.append({
+            "number": 4, "title": "בסיסי ידע",
+            "blocks": [{"type": "paragraph", "subhead": (kb.get("name") or "").strip(),
+                        "text": (kb.get("content") or "").strip()} for kb in kbs],
+        })
+    return {
+        "client_name": client_name,
+        "doc_type": "פרומפט בוט",
+        "domain": "",
+        "title": "פרומפט בוט WhatsApp",
+        "subtitle": f"בוט WhatsApp — {client_name}",
+        "accent": "gold",
+        "intro": "מסמך זה מרכז את פרומפט הבוט (אישיות, מטרה, מידע נוסף ובסיסי ידע) כפי שנגזר מפגישת האפיון.",
+        "sections": sections,
+        "footer_note": f"פרומפט בוט — {client_name} — {date}",
+    }
+
+
+def build_bot_and_deliver_to_ghl(
+    ghl,
+    contact_id: str,
+    transcript: str,
+    client_name: str | None,
+    date: str,
+) -> dict:
+    """Generate the WhatsApp bot prompt for a discovery meeting, render it to a
+    branded PDF, upload it to GHL, attach it to the contact's 'פרומפט בוט' file
+    field, and return the bot-prompt text to append as a note. Best-effort — never
+    raises; the text note is the guaranteed deliverable."""
+    result: dict = {"ok": False, "note_addition": None, "media_url": None, "error": None}
+    if not (transcript or "").strip():
+        result["error"] = "no transcript"
+        return result
+    try:
+        bot = spec_client.generate_bot_prompt(transcript, client_name=client_name)
+    except Exception as exc:  # noqa: BLE001
+        log.exception("bot prompt generation failed", extra={"contact": contact_id})
+        result["error"] = f"generation: {exc}"
+        return result
+
+    resolved_name = client_name or "לקוח"
+    note_lines = [f"🤖 פרומפט בוט — {resolved_name} — {date}", "", bot_prompt_render.format_main_prompt(bot)]
+    result["bot"] = bot
+    try:
+        pdf = spec_render.render_spec_pdf(_bot_to_spec_dict(bot, resolved_name, date))
+        url = _upload_pdf_and_attach(ghl, contact_id, pdf,
+                                     f"פרומפט בוט - {resolved_name} - {date}.pdf", BOT_FILE_FIELD_NAME)
+        result["media_url"] = url
+        if url:
+            note_lines += ["", f"📎 פרומפט בוט (PDF): {url}"]
+    except Exception as exc:  # noqa: BLE001 — PDF is a bonus; the text note still delivers
+        log.exception("bot PDF render/upload failed — text note still delivered",
+                      extra={"contact": contact_id})
+        result["error"] = f"pdf: {exc}"
+
+    result["ok"] = True
+    result["note_addition"] = "\n".join(note_lines).strip()
+    return result
 
 
 def build_and_deliver_to_ghl(
@@ -82,22 +174,11 @@ def build_and_deliver_to_ghl(
     # --- PDF → GHL media → attach to the contact's file field (all best-effort) ---
     try:
         pdf = spec_render.render_spec_pdf(spec)
-        filename = f"אפיון - {resolved_name} - {date}.pdf"
-        uploaded = ghl.upload_media(filename, pdf, "application/pdf")
-        url = ghl.media_url(uploaded)
+        url = _upload_pdf_and_attach(ghl, contact_id, pdf,
+                                     f"אפיון - {resolved_name} - {date}.pdf", SPEC_FILE_FIELD_NAME)
         result["media_url"] = url
         if url:
             note_lines += ["", f"📎 מסמך אפיון (PDF): {url}"]
-            try:
-                field = ghl.find_custom_field(SPEC_FILE_FIELD_NAME, data_type="FILE_UPLOAD")
-                if field:
-                    ghl.set_contact_custom_field(contact_id, field["id"], url)
-                else:
-                    log.info("spec file field %r not found — PDF linked in note only",
-                             SPEC_FILE_FIELD_NAME, extra={"contact": contact_id})
-            except Exception as exc:  # noqa: BLE001 — attaching to the field is a bonus
-                log.warning("spec PDF field attach failed (linked in note instead): %s",
-                            str(exc)[:200], extra={"contact": contact_id})
     except Exception as exc:  # noqa: BLE001 — PDF is a bonus; the text note still delivers
         log.exception("spec PDF render/upload failed — text note still delivered",
                       extra={"contact": contact_id})
