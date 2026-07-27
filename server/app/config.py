@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # Webhook Only app: signs every event with HMAC. Empty = /webhooks/zoom rejects all.
     zoom_webhook_secret_token: str = ""
     zoom_min_duration_minutes: int = 5  # skip meetings shorter than this
+    # Zoom finishes the audio-only (M4A) track a while after `recording.completed`
+    # fires, so an absent audio file usually means "not ready yet", not "never".
+    # Defer (don't terminally skip) up to this many processing attempts — with the
+    # 15-min poller, that's a few hours' grace for the M4A to appear before we give
+    # up on a genuinely audio-less recording.
+    zoom_audio_wait_max_attempts: int = 12
     # Participants on these domains are colleagues, never "the customer" — so a
     # teammate who also exists in GHL can't hijack the note. Comma-separated.
     zoom_internal_domains: str = "morethan.com"
