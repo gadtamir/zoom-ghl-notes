@@ -27,7 +27,7 @@ from ..services.anthropic_client import summarize_meeting
 from ..services.ghl_client import GHLClient, GHLError
 from .celery_app import celery_app
 from .ghl import _score_by_appointment, _split_topic_into_candidates
-from .spec_stage import build_and_deliver_to_ghl, is_spec_meeting
+from .spec_stage import build_and_deliver_to_ghl, build_bot_and_deliver_to_ghl, is_spec_meeting
 from .transcribe import transcribe_audio
 
 
@@ -430,23 +430,31 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                 # error) is swallowed here so it never reaches the outer GHLError
                 # handler, which would retry the whole meeting and double the notes.
                 if settings.spec_builder_enabled and is_spec_meeting(zm.topic):
-                    log.info("spec meeting — building spec + attaching PDF to GHL",
+                    log.info("spec meeting — building spec + bot prompt, attaching PDFs to GHL",
                              extra={"meeting": uuid, "contact": contact_id})
-                    try:
-                        spec_res = build_and_deliver_to_ghl(
-                            ghl, contact_id, zm.transcript or "",
-                            client_name=extracted_name or None,
-                            employee_name=zm.host_name,
-                            date=(zm.started_at or datetime.utcnow()).strftime("%Y-%m-%d"),
-                        )
-                        if spec_res.get("note_addition"):
-                            ghl.create_note(contact_id=contact_id, body=spec_res["note_addition"])
-                        if not spec_res.get("ok"):
-                            log.warning("spec build incomplete",
-                                        extra={"meeting": uuid, "error": spec_res.get("error")})
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning("spec stage failed — summary already attached",
-                                    extra={"meeting": uuid, "err": str(exc)[:200]})
+                    date = (zm.started_at or datetime.utcnow()).strftime("%Y-%m-%d")
+                    client_name = extracted_name or None
+                    # Two docs, each self-contained and best-effort: a failure in
+                    # one must not stop the other, and neither may reach the outer
+                    # GHLError handler (which would retry and double the summary).
+                    builders = (
+                        ("spec", lambda: build_and_deliver_to_ghl(
+                            ghl, contact_id, zm.transcript or "", client_name=client_name,
+                            employee_name=zm.host_name, date=date)),
+                        ("bot", lambda: build_bot_and_deliver_to_ghl(
+                            ghl, contact_id, zm.transcript or "", client_name=client_name, date=date)),
+                    )
+                    for label, build in builders:
+                        try:
+                            res = build()
+                            if res.get("note_addition"):
+                                ghl.create_note(contact_id=contact_id, body=res["note_addition"])
+                            if not res.get("ok"):
+                                log.warning("%s build incomplete", label,
+                                            extra={"meeting": uuid, "error": res.get("error")})
+                        except Exception as exc:  # noqa: BLE001
+                            log.warning("%s stage failed — summary already attached", label,
+                                        extra={"meeting": uuid, "err": str(exc)[:200]})
             zm.status = ZoomMeetingStatus.completed
             zm.completed_at = datetime.utcnow()
             db.commit()
