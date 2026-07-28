@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from .api import admin as admin_api
 from .api import jobs as jobs_api
 from .api import spec as spec_api
 from .api import upload as upload_api
@@ -29,6 +30,7 @@ app.include_router(upload_api.router)
 app.include_router(jobs_api.router)
 app.include_router(spec_api.router)
 app.include_router(zoom_webhook_api.router)
+app.include_router(admin_api.router)
 
 
 @app.get("/health", tags=["meta"])
