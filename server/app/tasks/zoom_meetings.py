@@ -424,6 +424,27 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                     return {"meeting": uuid, "status": "skipped", "reason": "internal"}
                 zm.ghl_contact_id = contact_id
                 zm.matched_email = matched
+                # Idempotency: a poller recovery or a redelivered webhook must not
+                # post a second summary. If one already exists for this meeting's
+                # timestamp — including one written by a manual backfill — adopt it
+                # and finish, rather than duplicating the customer's card.
+                when_marker = (f"📞 סיכום פגישת זום - {zm.started_at.strftime('%Y-%m-%d %H:%M')}"
+                               if zm.started_at else None)
+                existing = None
+                if when_marker:
+                    try:
+                        existing = next((n for n in ghl.contact_notes(contact_id)
+                                         if when_marker in (n.get("body") or "")), None)
+                    except Exception as exc:  # noqa: BLE001 — a lookup failure just means we post fresh
+                        log.warning("note idempotency check failed: %s", str(exc)[:150], extra={"meeting": uuid})
+                if existing:
+                    zm.ghl_note_id = existing.get("id")
+                    zm.status = ZoomMeetingStatus.completed
+                    zm.completed_at = datetime.utcnow()
+                    db.commit()
+                    log.info("zoom meeting already has a summary note — marked completed",
+                             extra={"meeting": uuid, "contact": contact_id})
+                    return {"meeting": uuid, "status": "completed", "note_id": zm.ghl_note_id, "idempotent": True}
                 note = ghl.create_note(contact_id=contact_id, body=_format_note(zm))
                 zm.ghl_note_id = note.get("id")
                 # The full transcript follows the summary as its own note(s), so
@@ -530,23 +551,48 @@ def poll_recordings() -> dict:
         with ZoomClient() as zoom:
             meetings = zoom.list_recordings(since=since)
             token = zoom._access_token()
-        done = {
-            row.zoom_meeting_uuid
-            for row in db.query(ZoomMeeting.zoom_meeting_uuid)
-            .filter(ZoomMeeting.status.in_(TERMINAL))
-            .all()
-        }
+        # A row is "done" only if it finished for a real reason. A no-audio skip is
+        # NOT done — the audio simply wasn't ready when we first looked — so we set
+        # it aside for recovery instead of counting it as terminal.
+        done: set[str] = set()
+        stuck_no_audio: set[str] = set()
+        for uuid_, status_, err_ in (
+            db.query(ZoomMeeting.zoom_meeting_uuid, ZoomMeeting.status, ZoomMeeting.error_message)
+            .filter(ZoomMeeting.status.in_(TERMINAL)).all()
+        ):
+            if status_ == ZoomMeetingStatus.skipped and "no audio_only recording file" in (err_ or ""):
+                stuck_no_audio.add(uuid_)
+            else:
+                done.add(uuid_)
+
+        recovered = 0
         for m in meetings:
             uuid = m.get("uuid") or ""
             if not uuid or uuid in done:
                 continue
+            if uuid in stuck_no_audio:
+                # Reprocess only once the previously-missing audio is actually
+                # present; otherwise leave it for a later sweep. Reset to a
+                # non-terminal state so the process task's duplicate-guard lets it
+                # run again (idempotent note creation prevents any double-posting).
+                if not any(f.get("recording_type") == "audio_only" and f.get("download_url")
+                           for f in m.get("recording_files", [])):
+                    continue
+                row = db.query(ZoomMeeting).filter(ZoomMeeting.zoom_meeting_uuid == uuid).first()
+                if row:
+                    row.status = ZoomMeetingStatus.received
+                    row.error_message = None
+                    row.completed_at = None
+                    db.commit()
+                    recovered += 1
             process_zoom_recording.delay(m, token)
             queued += 1
         log.info(
             "zoom poll done",
-            extra={"listed": len(meetings), "queued": queued, "lookback_hours": settings.zoom_poll_lookback_hours},
+            extra={"listed": len(meetings), "queued": queued, "recovered": recovered,
+                   "lookback_hours": settings.zoom_poll_lookback_hours},
         )
-        return {"status": "ok", "listed": len(meetings), "queued": queued}
+        return {"status": "ok", "listed": len(meetings), "queued": queued, "recovered": recovered}
     finally:
         db.close()
 
