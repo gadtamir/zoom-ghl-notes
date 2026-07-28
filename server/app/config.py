@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     gdrive_parent_folder_id: str = ""       # parent folder that holds per-client folders
     # Shared secret protecting the manual spec-builder web page (/spec/ui).
     spec_ui_token: str = ""
+    # Token that guards the /admin endpoints (status + manual recovery). Empty
+    # disables them entirely (503) so admin is never reachable unprotected.
+    admin_api_token: str = ""
 
     admin_email: str = "gad@morethan.com"
     resend_api_key: str = ""
