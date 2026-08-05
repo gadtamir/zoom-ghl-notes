@@ -39,7 +39,7 @@ _MEETING_DT = re.compile(
 _GHL_DT_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S")
 # Generic Zoom-topic words to strip (so "פגישה עם דני" → "דני").
 _GENERIC_WORDS = re.compile(
-    r"(?:^|\s)(שיחה|פגישה|פגישת|זום|טלפון|טלפונית|עם|של|התאמה|אפיון|recording|meeting|zoom|call|with)(?=\s|$)",
+    r"(?:^|\s)(שיחה|פגישה|פגישת|זום|טלפון|טלפונית|עם|של|התאמה|אפיון|תמיכה|טכנית|recording|meeting|zoom|call|with)(?=\s|$)",
     re.IGNORECASE,
 )
 # Separators that split a topic into independent candidate segments.
