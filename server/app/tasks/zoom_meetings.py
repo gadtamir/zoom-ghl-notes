@@ -140,6 +140,29 @@ def _split_for_notes(body: str, budget: int = TRANSCRIPT_BODY_BUDGET) -> list[st
     return chunks
 
 
+def _recording_note(zm: ZoomMeeting, meeting: dict) -> str | None:
+    """Note body linking to the Zoom playback page, or None if Zoom didn't give one.
+
+    `share_url` comes straight off the webhook/list payload, so nothing extra is
+    stored or fetched — which also means this only applies to meetings processed
+    from now on. Cloud recordings are password-protected by default, so the
+    passcode goes in the same note; without it the link is a dead end for anyone
+    who wasn't on the call.
+    """
+    share_url = (meeting.get("share_url") or "").strip()
+    if not share_url:
+        return None
+    when = zm.started_at.strftime("%Y-%m-%d %H:%M") if zm.started_at else "?"
+    lines = [f"🎥 הקלטת פגישת זום - {when}", "", share_url]
+    passcode = (meeting.get("recording_play_passcode") or meeting.get("password") or "").strip()
+    if passcode:
+        lines.append(f"סיסמה: {passcode}")
+    days = get_settings().zoom_recording_retention_days
+    if days > 0:
+        lines += ["", f"⏳ ההקלטה נמחקת מהזום אוטומטית לאחר {days} יום."]
+    return "\n".join(lines)
+
+
 def _transcript_notes(zm: ZoomMeeting) -> list[str]:
     """Full-transcript note bodies to attach after the summary (empty if none)."""
     if not (zm.transcript or "").strip():
@@ -447,6 +470,19 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                     return {"meeting": uuid, "status": "completed", "note_id": zm.ghl_note_id, "idempotent": True}
                 note = ghl.create_note(contact_id=contact_id, body=_format_note(zm))
                 zm.ghl_note_id = note.get("id")
+                # A short note with the recording link goes between the summary
+                # and the transcript — easy to spot on the card, and not buried
+                # under thousands of characters of transcript. Best effort, like
+                # the transcript below.
+                recording_body = _recording_note(zm, meeting)
+                if recording_body:
+                    try:
+                        ghl.create_note(contact_id=contact_id, body=recording_body)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "recording-link note failed — summary already attached",
+                            extra={"meeting": uuid, "contact": contact_id, "err": str(exc)[:200]},
+                        )
                 # The full transcript follows the summary as its own note(s), so
                 # the readable summary stays the first thing on the card. Best
                 # effort: the summary is the deliverable, and losing the raw
