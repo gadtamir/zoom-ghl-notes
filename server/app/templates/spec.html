@@ -4,323 +4,233 @@
 <meta charset="utf-8">
 <title>{{ spec.title | default("מסמך אפיון לקוח") }} · {{ spec.client_name }}</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap');
+  @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700;800&family=Heebo:wght@300;400;500;600;700;800&display=swap');
 
+  /* Brand accent is a variable so a whole document re-colours from one class:
+     blue by default, pink for beauty/bridal clients, gold for the bot-prompt doc. */
   :root {
-    /* Default accent = blue (רוית / פולוג'וי). Gold variant set via body.gold. */
-    --accent: #2f5fd6;
-    --accent-soft: #eaf0fd;
-    --navy: #1e2a44;
-    --ink: #24303f;
-    --muted: #7a8494;
-    --line: #e5e8ee;
-    --page-bg: #ffffff;
+    --accent: #2563eb;
+    --accent-soft: #f0f5ff;
+    --accent-line: #d6e2ff;
+    --accent-deep: #1f3a8a;
+    --ink: #1f2733;
+    --ink-strong: #0f1729;
+    --muted: #6b7686;
+    --faint: #9aa3b2;
+    --line: #e4e8ef;
+    --panel: #f8fafc;
+  }
+  body.pink {
+    --accent: #b8437e;
+    --accent-soft: #fdf2f8;
+    --accent-line: #f6d4e6;
+    --accent-deep: #8d2f61;
   }
   body.gold {
     --accent: #b08838;
     --accent-soft: #f6efe0;
-    --navy: #1e2a44;
+    --accent-line: #e8d6ac;
+    --accent-deep: #7c5f22;
+  }
+
+  @page {
+    size: A4; margin: 22mm 18mm 20mm 18mm;
+    @bottom-center {
+      content: "{{ spec.doc_type | default('מסמך אפיון לקוח') }} · More-Than · עמוד " counter(page) " מתוך " counter(pages);
+      font-family: 'Rubik', 'Heebo', sans-serif; font-size: 8.5pt; color: #9aa3b2;
+    }
   }
 
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body {
-    font-family: 'Heebo', 'Segoe UI', Arial, sans-serif;
-    color: var(--ink);
-    background: var(--page-bg);
-    font-size: 14px;
-    line-height: 1.7;
-    direction: rtl;
+    font-family: 'Rubik', 'Heebo', sans-serif; direction: rtl; text-align: right;
+    color: var(--ink); font-size: 10.5pt; line-height: 1.6;
   }
 
-  @page {
-    size: A4;
-    margin: 20mm 16mm 18mm 16mm;
-    @bottom-center {
-      content: "מסמך אפיון לקוח · More-Than · עמוד " counter(page) " מתוך " counter(pages);
-      font-family: 'Heebo', Arial, sans-serif;
-      font-size: 9px;
-      color: #aab2c0;
-    }
-  }
+  /* ---------- Cover ---------- */
+  .cover { border-right: 5px solid var(--accent); padding: 4px 18px 18px 0; margin-bottom: 24px; }
+  .brand { font-size: 11pt; font-weight: 600; color: var(--accent); letter-spacing: .5px; }
+  h1 { font-size: 23pt; font-weight: 700; margin: 6px 0 4px 0; color: var(--ink-strong); }
+  .subtitle { font-size: 12pt; color: #5b6675; margin-bottom: 14px; }
+  .meta-grid { display: flex; flex-wrap: wrap; margin-top: 12px; border: 1px solid var(--line);
+    border-radius: 8px; overflow: hidden; }
+  .meta-cell { flex: 1 1 33%; padding: 9px 14px; border-left: 1px solid var(--line); background: var(--panel); }
+  .meta-cell:last-child { border-left: none; }
+  .meta-cell .k { font-size: 8pt; color: #94a0b0; font-weight: 500; }
+  .meta-cell .v { font-size: 10.5pt; color: var(--ink); font-weight: 600; }
 
-  /* ---------- Header ---------- */
-  .brandbar {
-    display: flex;
-    justify-content: flex-start;
-    align-items: center;
-    gap: 10px;
-    border-bottom: 3px solid var(--navy);
-    padding-bottom: 10px;
-    margin-bottom: 26px;
-  }
-  .brandbar .badge {
-    background: var(--navy);
-    color: #fff;
-    width: 26px; height: 26px;
-    border-radius: 7px;
-    display: flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 13px;
-  }
-  .brandbar .brandtext {
-    color: var(--accent);
-    font-weight: 700;
-    font-size: 13px;
-    letter-spacing: .2px;
-  }
-
-  h1.doctitle {
-    font-size: 34px;
-    font-weight: 800;
-    margin: 0 0 6px;
-    color: var(--navy);
-  }
-  .subtitle {
-    font-size: 16px;
-    color: var(--muted);
-    margin: 0 0 22px;
-  }
-
-  /* ---------- Meta box ---------- */
-  .meta {
-    display: flex;
-    gap: 0;
-    background: #f6f7f9;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    overflow: hidden;
-    margin-bottom: 22px;
-  }
-  .meta .cell {
-    flex: 1;
-    padding: 14px 18px;
-    border-left: 1px solid var(--line);
-  }
-  .meta .cell:last-child { border-left: none; }
-  .meta .k { font-size: 11px; color: var(--muted); margin-bottom: 3px; }
-  .meta .v { font-size: 15px; font-weight: 700; color: var(--navy); }
-
-  /* ---------- Intro ---------- */
-  .intro {
-    background: var(--accent-soft);
-    border-radius: 12px;
-    padding: 16px 20px;
-    font-size: 14px;
-    line-height: 1.8;
-    margin-bottom: 30px;
-  }
+  .intro { background: var(--accent-soft); border: 1px solid var(--accent-line); border-radius: 8px;
+    padding: 13px 16px; font-size: 10pt; color: #2c3a52; margin-bottom: 16px; }
+  .principle { background: #fffaf0; border: 1px solid #f3dcb0; border-radius: 8px;
+    padding: 13px 16px; font-size: 10pt; color: #6b4a15; margin-bottom: 22px; }
+  .principle b { color: #92400e; }
 
   /* ---------- Sections ---------- */
-  .section { margin-bottom: 26px; }
-  .section-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border-bottom: 1px solid var(--line);
-    padding-bottom: 8px;
-    margin-bottom: 14px;
-  }
-  .section-head .num {
-    background: var(--accent);
-    color: #fff;
-    min-width: 26px; height: 26px;
-    border-radius: 6px;
-    display: inline-flex; align-items: center; justify-content: center;
-    font-weight: 800; font-size: 13px;
-    padding: 0 4px;
-  }
-  .section-head h2 {
-    margin: 0;
-    font-size: 19px;
-    font-weight: 800;
-    color: var(--navy);
-  }
-  .subhead {
-    font-weight: 700;
-    color: var(--navy);
-    margin: 14px 0 8px;
-    font-size: 14.5px;
-  }
+  h2 { font-size: 13.5pt; font-weight: 700; color: var(--ink-strong); margin: 24px 0 10px 0;
+    padding-bottom: 6px; border-bottom: 2px solid #eef1f6; display: flex; align-items: baseline; gap: 9px; }
+  h2 .num { display: inline-block; min-width: 26px; height: 26px; line-height: 26px; text-align: center;
+    background: var(--accent); color: #fff; border-radius: 6px; font-size: 11pt; font-weight: 700; }
+  h3 { font-size: 11pt; font-weight: 700; color: var(--accent-deep); margin: 14px 0 4px 0; }
+  /* Sections flow across pages on purpose: pinning a whole section together
+     pushes any section taller than the remaining space onto a fresh page and
+     leaves half a page blank. Only the small atomic units below refuse to split,
+     and a heading is never left stranded at the foot of a page. */
+  h2, h3 { break-after: avoid; }
 
-  /* ---------- Bullets ---------- */
-  ul.bullets { list-style: none; margin: 0; padding: 0; }
-  ul.bullets li {
-    position: relative;
-    padding-right: 16px;
-    margin-bottom: 7px;
-  }
-  ul.bullets li::before {
-    content: "•";
-    color: var(--accent);
-    position: absolute;
-    right: 0;
-    font-weight: 800;
-  }
-  ul.bullets li .lead { font-weight: 700; color: var(--navy); }
+  ul.clean { margin: 6px 0 4px 0; padding-right: 20px; }
+  ul.clean li { margin-bottom: 5px; }
+  .lead { font-weight: 500; color: #2c3a52; margin: 2px 0 8px 0; }
+  p.para { margin: 0 0 10px 0; }
+  strong { font-weight: 600; color: var(--ink-strong); }
 
-  /* ---------- Numbered steps ---------- */
-  ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
-  ol.steps li {
-    position: relative;
-    padding-right: 34px;
-    margin-bottom: 10px;
-    min-height: 24px;
-  }
-  ol.steps li::before {
-    counter-increment: step;
-    content: counter(step);
-    position: absolute; right: 0; top: 0;
-    background: var(--accent);
-    color: #fff;
-    width: 22px; height: 22px;
-    border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 700;
-  }
-  ol.steps li .lead { font-weight: 700; color: var(--navy); }
+  .note { font-size: 9pt; color: var(--muted); background: #f7f8fa; border-right: 3px solid #c8d0db;
+    padding: 7px 12px; border-radius: 4px; margin: 8px 0 4px 0; }
+  .callout { background: var(--panel); border-right: 3px solid var(--accent); border-radius: 6px;
+    padding: 10px 14px; color: #55606f; font-size: 9.7pt; margin: 10px 0; }
 
-  p.para { margin: 0 0 10px; }
+  /* ---------- Numbered flow steps ---------- */
+  .flow-step { display: flex; gap: 11px; margin-bottom: 8px; break-inside: avoid; }
+  .flow-step .badge { flex: 0 0 24px; height: 24px; line-height: 24px; text-align: center;
+    background: var(--ink-strong); color: #fff; border-radius: 50%; font-weight: 700; font-size: 9pt; }
+  .flow-step .body { flex: 1; }
 
-  /* ---------- Callout ---------- */
-  .callout {
-    background: #f6f7f9;
-    border-right: 3px solid var(--accent);
-    border-radius: 8px;
-    padding: 10px 16px;
-    color: #55606f;
-    font-size: 13px;
-    margin: 12px 0;
-  }
+  /* ---------- KPI cards ---------- */
+  .kpi-grid { display: flex; gap: 10px; margin-top: 8px; }
+  .kpi { flex: 1; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px;
+    background: var(--panel); text-align: center; }
+  /* Isolate only — never force LTR. These values are usually Hebrew-prefixed
+     ("כ-70%"), which an LTR override renders backwards as "70%-כ". Isolation
+     keeps a value from reordering against its neighbours; the prompt handles the
+     leading-sign case by asking for "כ-" instead of "~". */
+  .kpi .n { font-size: 14pt; font-weight: 700; color: var(--accent-deep);
+    unicode-bidi: isolate; }
+  .kpi .l { font-size: 8.5pt; color: var(--muted); }
 
-  /* ---------- Pills ---------- */
-  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 4px; }
-  .pill {
-    border: 1px solid var(--accent);
-    color: var(--navy);
-    border-radius: 999px;
-    padding: 5px 14px;
-    font-size: 12.5px;
-    font-weight: 600;
-    background: #fff;
-  }
+  /* ---------- Pipeline pills ---------- */
+  .pill-stage { display: inline-block; background: var(--accent-soft); color: var(--accent-deep);
+    border: 1px solid var(--accent-line); font-size: 9pt; font-weight: 600;
+    padding: 3px 10px; border-radius: 20px; margin: 2px 3px; }
+
+  /* ---------- Option / decision boxes ---------- */
+  .opt-box { border: 1px solid var(--line); border-radius: 8px; padding: 0; overflow: hidden;
+    margin: 8px 0; break-inside: avoid; }
+  .opt-box .oh { background: var(--panel); padding: 8px 14px; font-weight: 700;
+    color: var(--accent-deep); border-bottom: 1px solid #eef1f6; }
+  .opt-box .ob { padding: 10px 14px; font-size: 9.7pt; }
 
   /* ---------- Table ---------- */
-  table.data {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 12px 0;
-    font-size: 13px;
-    overflow: hidden;
-    border-radius: 10px;
-  }
-  table.data thead th {
-    background: var(--navy);
-    color: #fff;
-    font-weight: 700;
-    padding: 11px 14px;
-    text-align: right;
-  }
-  table.data tbody td {
-    padding: 11px 14px;
-    border-bottom: 1px solid var(--line);
-    text-align: right;
-  }
+  table.data { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 9.7pt;
+    border-radius: 8px; overflow: hidden; break-inside: avoid; }
+  table.data thead th { background: var(--ink-strong); color: #fff; font-weight: 700;
+    padding: 9px 12px; text-align: right; }
+  table.data tbody td { padding: 9px 12px; border-bottom: 1px solid var(--line); text-align: right; }
   table.data tbody tr:nth-child(even) { background: #fafbfc; }
   table.data tbody tr:last-child td { border-bottom: none; }
   .cell-flag { color: #c0392b; font-weight: 600; }
 
-  /* ---------- Cards ---------- */
-  .cards { display: flex; gap: 14px; flex-wrap: wrap; margin: 12px 0; }
-  .card {
-    flex: 1;
-    min-width: 200px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    padding: 16px 18px;
-  }
-  .card.dark { background: var(--navy); color: #fff; border: none; }
-  .card .tag {
-    display: inline-block;
-    background: var(--accent-soft);
-    color: var(--accent);
-    border-radius: 999px;
-    padding: 2px 10px;
-    font-size: 11px;
-    font-weight: 700;
-    margin-bottom: 8px;
-  }
-  .card .ctitle { font-weight: 700; font-size: 14px; margin-bottom: 6px; }
-  .card .cnote { color: var(--muted); font-size: 12px; }
-  .card.dark .cnote { color: #b9c2d4; }
-  .card .cvalue { font-size: 22px; font-weight: 800; color: var(--navy); }
-  .card.dark .cvalue { color: #fff; }
+  /* ---------- Pricing cards ---------- */
+  .price-options { display: flex; gap: 12px; margin-top: 6px; }
+  .price-card { flex: 1; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; break-inside: avoid; }
+  .price-card.featured { border: 2px solid var(--accent); }
+  .price-card .pc-head { padding: 10px 14px; font-weight: 700; font-size: 10.5pt; }
+  .price-card.plain .pc-head { background: var(--panel); color: var(--ink-strong); border-bottom: 1px solid var(--line); }
+  .price-card.featured .pc-head { background: var(--accent); color: #fff; }
+  .price-card .pc-body { padding: 12px 14px; }
+  .price-card .big { font-size: 19pt; font-weight: 700; color: var(--ink-strong); }
+  .price-card .big small { font-size: 10pt; font-weight: 500; color: #5b6675; }
+  .price-card .row { display: flex; justify-content: space-between; font-size: 9.5pt;
+    padding: 4px 0; border-bottom: 1px solid #f2f4f7; }
+  .price-card .row:last-child { border-bottom: none; }
+  .price-card .row .k { color: #5b6675; }
+  .price-card .row .v { font-weight: 600; color: var(--ink-strong); }
+  .price-card .tagline { font-size: 9pt; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+  .badge-tag { display: inline-block; background: #fff; color: var(--accent); font-size: 8pt;
+    font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
 
-  .footer-note {
-    margin-top: 30px;
-    padding-top: 14px;
-    border-top: 1px solid var(--line);
-    color: var(--muted);
-    font-size: 12px;
-    line-height: 1.7;
-  }
-  .avoid-break { break-inside: avoid; }
+  /* ---------- Legacy cards (kept for the existing spec + bot-prompt docs) ---------- */
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin: 12px 0; }
+  .card { flex: 1; min-width: 180px; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .card.dark { background: var(--ink-strong); color: #fff; border: none; }
+  .card .tag { display: inline-block; background: var(--accent-soft); color: var(--accent);
+    border-radius: 999px; padding: 2px 10px; font-size: 8pt; font-weight: 700; margin-bottom: 7px; }
+  .card .ctitle { font-weight: 700; font-size: 10pt; margin-bottom: 5px; }
+  .card .cvalue { font-size: 16pt; font-weight: 700; color: var(--ink-strong); }
+  .card.dark .cvalue { color: #fff; }
+  .card .cnote { color: var(--muted); font-size: 8.5pt; }
+  .card.dark .cnote { color: #b9c2d4; }
+
+  .footer-note { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--line);
+    font-size: 9pt; color: #8a94a3; }
 </style>
 </head>
-<body class="{{ 'gold' if spec.accent == 'gold' else '' }}">
+<body class="{% if spec.accent == 'pink' %}pink{% elif spec.accent == 'gold' %}gold{% endif %}">
 
-  <div class="brandbar">
-    <span class="badge">M</span>
-    <span class="brandtext">MORE-THAN · מערכת CRM ואוטומציה</span>
-  </div>
-
-  <h1 class="doctitle">{{ spec.title | default("מסמך אפיון לקוח") }}</h1>
-  {% if spec.subtitle %}<div class="subtitle">{{ spec.subtitle }}</div>{% endif %}
-
-  <div class="meta">
-    <div class="cell"><div class="k">לקוח</div><div class="v">{{ spec.client_name }}</div></div>
-    {% if spec.domain %}<div class="cell"><div class="k">תחום</div><div class="v">{{ spec.domain }}</div></div>{% endif %}
-    <div class="cell"><div class="k">סוג מסמך</div><div class="v">{{ spec.doc_type | default("אפיון צרכים") }}</div></div>
+  <div class="cover">
+    <div class="brand">MORE-THAN · מערכת CRM ואוטומציה</div>
+    <h1>{{ spec.title | default("מסמך אפיון לקוח") }}</h1>
+    {% if spec.subtitle %}<div class="subtitle">{{ spec.subtitle }}</div>{% endif %}
+    <div class="meta-grid">
+      <div class="meta-cell"><div class="k">לקוח</div><div class="v">{{ spec.client_name }}</div></div>
+      {% if spec.domain %}<div class="meta-cell"><div class="k">תחום</div><div class="v">{{ spec.domain }}</div></div>{% endif %}
+      <div class="meta-cell"><div class="k">סוג מסמך</div><div class="v">{{ spec.doc_type | default("אפיון צרכים") }}</div></div>
+    </div>
   </div>
 
   {% if spec.intro %}<div class="intro">{{ spec.intro }}</div>{% endif %}
+  {% if spec.principle %}<div class="principle"><b>עקרון מנחה:</b> {{ spec.principle }}</div>{% endif %}
 
   {% for section in spec.sections %}
   <div class="section">
-    <div class="section-head">
-      <span class="num">{{ section.number }}</span>
-      <h2>{{ section.title }}</h2>
-    </div>
+    <h2><span class="num">{{ section.number }}</span>{{ section.title }}</h2>
 
     {% for block in section.blocks %}
-      {% if block.subhead %}<div class="subhead">{{ block.subhead }}</div>{% endif %}
+      {% if block.subhead %}<h3>{{ block.subhead }}</h3>{% endif %}
 
       {% if block.type == "paragraph" %}
         <p class="para">{{ block.text }}</p>
 
       {% elif block.type == "bullets" %}
-        <ul class="bullets">
-          {% for item in block.items %}
-          <li>{% if item.lead %}<span class="lead">{{ item.lead }}:</span> {% endif %}{{ item.text }}</li>
+        <ul class="clean">
+          {% for item in block['items'] %}
+          <li>{% if item.lead %}<strong>{{ item.lead }}:</strong> {% endif %}{{ item.text }}</li>
           {% endfor %}
         </ul>
 
       {% elif block.type == "steps" %}
-        <ol class="steps">
-          {% for item in block.items %}
-          <li>{% if item.lead %}<span class="lead">{{ item.lead }}</span> — {% endif %}{{ item.text }}</li>
+        {% for item in block['items'] %}
+        <div class="flow-step">
+          <div class="badge">{{ loop.index }}</div>
+          <div class="body">{% if item.lead %}<strong>{{ item.lead }}:</strong> {% endif %}{{ item.text }}</div>
+        </div>
+        {% endfor %}
+
+      {% elif block.type == "pills" %}
+        <div>{% for p in block['items'] %}<span class="pill-stage">{{ p.label or p.text or p }}</span>{% endfor %}</div>
+
+      {% elif block.type == "kpi" %}
+        <div class="kpi-grid">
+          {% for item in block['items'] %}
+          <div class="kpi"><div class="n">{{ item.n }}</div><div class="l">{{ item.l }}</div></div>
           {% endfor %}
-        </ol>
+        </div>
+
+      {% elif block.type == "options" %}
+        {% for item in block['items'] %}
+        <div class="opt-box">
+          <div class="oh">{{ item.title }}</div>
+          <div class="ob">{{ item.text }}</div>
+        </div>
+        {% endfor %}
 
       {% elif block.type == "callout" %}
         <div class="callout">{{ block.text }}</div>
 
-      {% elif block.type == "pills" %}
-        <div class="pills">
-          {% for p in block.items %}<span class="pill">{{ p.label or p.text or p }}</span>{% endfor %}
-        </div>
+      {% elif block.type == "note" %}
+        <div class="note">{{ block.text }}</div>
 
       {% elif block.type == "table" %}
-        <table class="data avoid-break">
+        <table class="data">
           <thead><tr>{% for h in block.headers %}<th>{{ h }}</th>{% endfor %}</tr></thead>
           <tbody>
             {% for row in block.rows %}
@@ -329,10 +239,31 @@
           </tbody>
         </table>
 
+      {% elif block.type == "pricing" %}
+        {% if block.lead %}<div class="lead">{{ block.lead }}</div>{% endif %}
+        <div class="price-options">
+          {% for card, kind in [(block.plain, 'plain'), (block.featured, 'featured')] %}
+            {% if card %}
+            <div class="price-card {{ kind }}">
+              <div class="pc-head">{{ card.title }}{% if card.tag %}<span class="badge-tag">{{ card.tag }}</span>{% endif %}</div>
+              <div class="pc-body">
+                {% if card.price %}<div class="big">{{ card.price }}{% if card.price_suffix %} <small>{{ card.price_suffix }}</small>{% endif %}</div>{% endif %}
+                {% if card.tagline %}<div class="tagline" style="margin-bottom:8px">{{ card.tagline }}</div>{% endif %}
+                {% for r in card.rows %}
+                <div class="row"><span class="k">{{ r.k }}</span><span class="v">{{ r.v }}</span></div>
+                {% endfor %}
+                {% if card.footnote %}<div class="tagline">{{ card.footnote }}</div>{% endif %}
+              </div>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% if block.note_text %}<div class="note">{{ block.note_text }}</div>{% endif %}
+
       {% elif block.type == "cards" %}
         <div class="cards">
-          {% for c in block.items %}
-          <div class="card {{ 'dark' if c.dark else '' }} avoid-break">
+          {% for c in block['items'] %}
+          <div class="card {{ 'dark' if c.dark else '' }}">
             {% if c.tag %}<span class="tag">{{ c.tag }}</span>{% endif %}
             {% if c.title %}<div class="ctitle">{{ c.title }}</div>{% endif %}
             {% if c.value %}<div class="cvalue">{{ c.value }}</div>{% endif %}

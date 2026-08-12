@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<title>{{ title }}</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&family=Heebo:wght@400;500;600;700&display=swap');
+
+  @page {
+    size: A4; margin: 20mm 18mm 18mm 18mm;
+    @bottom-center {
+      content: "תמלול מלא · More-Than · עמוד " counter(page) " מתוך " counter(pages);
+      font-family: 'Rubik', 'Heebo', sans-serif; font-size: 8.5pt; color: #9aa3b2;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Rubik', 'Heebo', sans-serif; direction: rtl; text-align: right;
+    color: #1f2733; font-size: 10pt; line-height: 1.75;
+  }
+
+  .head { border-right: 5px solid #2563eb; padding: 2px 16px 14px 0; margin-bottom: 18px; }
+  .brand { font-size: 10pt; font-weight: 600; color: #2563eb; letter-spacing: .5px; }
+  h1 { font-size: 19pt; font-weight: 700; margin: 5px 0 4px 0; color: #0f1729; }
+  .meta { font-size: 9.5pt; color: #6b7686; }
+
+  .disclaimer {
+    background: #f7f8fa; border-right: 3px solid #c8d0db; border-radius: 4px;
+    padding: 8px 12px; font-size: 8.5pt; color: #6b7686; margin-bottom: 18px;
+  }
+
+  /* Paragraphs come pre-grouped by the caller; keep them loose enough to skim. */
+  p { margin: 0 0 11px 0; }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="brand">MORE-THAN · מערכת CRM ואוטומציה</div>
+    <h1>{{ title }}</h1>
+    {% if subtitle %}<div class="meta">{{ subtitle }}</div>{% endif %}
+  </div>
+
+  <div class="disclaimer">
+    תמלול אוטומטי. ייתכנו שגיאות זיהוי בשמות ובמונחים, ובמקרים נדירים חזרות של משפט
+    שנוצרו על ידי מנוע התמלול. לצורך ציטוט מדויק יש להצליב מול ההקלטה.
+  </div>
+
+  {% for para in paragraphs %}<p>{{ para }}</p>{% endfor %}
+</body>
+</html>

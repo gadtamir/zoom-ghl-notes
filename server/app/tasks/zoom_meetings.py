@@ -23,11 +23,18 @@ from pathlib import Path
 from ..config import get_settings
 from ..db import SessionLocal
 from ..models import ZoomMeeting, ZoomMeetingStatus
+from ..services import spec_render
 from ..services.anthropic_client import summarize_meeting
 from ..services.ghl_client import GHLClient, GHLError
 from .celery_app import celery_app
-from .ghl import _score_by_appointment, _split_topic_into_candidates
-from .spec_stage import build_and_deliver_to_ghl, build_bot_and_deliver_to_ghl, is_spec_meeting
+from .ghl import _score_by_appointment, _split_topic_into_candidates, upload_pdf_and_attach
+from .spec_stage import (
+    build_and_deliver_to_ghl,
+    build_bot_and_deliver_to_ghl,
+    build_demo_spec_and_deliver_to_ghl,
+    is_demo_meeting,
+    is_spec_meeting,
+)
 from .transcribe import transcribe_audio
 
 
@@ -75,11 +82,17 @@ def _storage_path(meeting_id: str) -> Path:
     return Path(get_settings().upload_dir) / f"zoom-{meeting_id}.m4a"
 
 
-def _format_note(zm: ZoomMeeting) -> str:
+def _format_note(zm: ZoomMeeting, transcript_url: str | None = None) -> str:
     when = zm.started_at.strftime("%Y-%m-%d %H:%M") if zm.started_at else "?"
     host = zm.host_name or zm.host_email or "—"
     title = f"📞 סיכום פגישת זום - {when} ({zm.duration_minutes} דק') - {host}"
-    return f"{title}\n\n{zm.summary or '(אין סיכום זמין)'}"
+    body = f"{title}\n\n{zm.summary or '(אין סיכום זמין)'}"
+    # Always link the transcript file from the summary, even though it is also
+    # attached to a contact field: if that field doesn't exist in this location,
+    # the link in the note is the only thing pointing at the uploaded file.
+    if transcript_url:
+        body += f"\n\n📎 תמלול מלא (PDF): {transcript_url}"
+    return body
 
 
 # GHL rejects a note body over 65,000 characters ("body must be shorter than or
@@ -141,7 +154,7 @@ def _split_for_notes(body: str, budget: int = TRANSCRIPT_BODY_BUDGET) -> list[st
 
 
 def _transcript_notes(zm: ZoomMeeting) -> list[str]:
-    """Full-transcript note bodies to attach after the summary (empty if none)."""
+    """Full-transcript note bodies — the fallback form, see `_attach_transcript`."""
     if not (zm.transcript or "").strip():
         return []
     when = zm.started_at.strftime("%Y-%m-%d %H:%M") if zm.started_at else "?"
@@ -152,6 +165,68 @@ def _transcript_notes(zm: ZoomMeeting) -> list[str]:
         suffix = f" (חלק {i}/{total})" if total > 1 else ""
         bodies.append(f"📝 תמלול מלא - פגישת זום {when}{suffix}\n\n{chunk}")
     return bodies
+
+
+# The contact file field that holds the sales-call transcript. Resolved by name at
+# runtime, so no id is hardcoded. It holds ONE file, and it is named for the sales
+# call specifically — so only a demo call is pinned to it. Every other meeting's
+# transcript is still uploaded and linked from its summary note, it just doesn't
+# claim this field and overwrite the sales call a year later.
+TRANSCRIPT_FILE_FIELD_NAME = "תמלול מלא של שיחת המכירה"
+
+
+def _upload_transcript_file(ghl: GHLClient, contact_id: str, zm: ZoomMeeting) -> str | None:
+    """Put the full transcript on the contact as a file. Returns its URL, or None.
+
+    Notes are the layer a human skims, and an hour-long call pasted across two or
+    three 65k-character notes buries the summary that is actually meant to be read.
+    The transcript is still needed in full — for quoting a customer back, or for
+    re-deriving a spec — so it moves to the contact's file field instead.
+
+    Returning None means the file route failed; the caller then falls back to
+    `_post_transcript_notes`, because a noisy contact card is a far smaller loss
+    than a transcript that exists nowhere outside our own database.
+    """
+    if not (zm.transcript or "").strip():
+        return None
+
+    when = zm.started_at.strftime("%Y-%m-%d %H:%M") if zm.started_at else "?"
+    file_date = zm.started_at.strftime("%Y-%m-%d") if zm.started_at else "ללא-תאריך"
+    try:
+        pdf = spec_render.render_transcript_pdf(
+            title="תמלול מלא — פגישת זום",
+            subtitle=f"{when}"
+                     + (f" · {zm.duration_minutes} דק'" if zm.duration_minutes else "")
+                     + (f" · {zm.topic}" if zm.topic else ""),
+            paragraphs=[p for p in _paragraphize(zm.transcript).split("\n\n") if p.strip()],
+        )
+        url = upload_pdf_and_attach(
+            ghl, contact_id, pdf,
+            f"תמלול - {file_date}.pdf",
+            TRANSCRIPT_FILE_FIELD_NAME if is_demo_meeting(zm.topic) else None,
+        )
+        if url:
+            log.info("transcript attached as file",
+                     extra={"meeting": zm.zoom_meeting_uuid, "contact": contact_id})
+            return url
+        raise RuntimeError("upload returned no hosted URL")
+    except Exception as exc:  # noqa: BLE001 — fall back rather than lose the transcript
+        log.warning("transcript file upload failed — falling back to notes: %s", str(exc)[:200],
+                    extra={"meeting": zm.zoom_meeting_uuid, "contact": contact_id})
+        return None
+
+
+def _post_transcript_notes(ghl: GHLClient, contact_id: str, zm: ZoomMeeting) -> None:
+    """Fallback only: the transcript as note text, posted after the summary note
+    so the summary stays the first thing on the card."""
+    for body in _transcript_notes(zm):
+        try:
+            ghl.create_note(contact_id=contact_id, body=body)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("transcript fallback note failed — summary already attached",
+                        extra={"meeting": zm.zoom_meeting_uuid, "contact": contact_id,
+                               "err": str(exc)[:200]})
+            break
 
 
 def _external_participant_emails(meeting_uuid: str) -> list[str]:
@@ -445,41 +520,47 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                     log.info("zoom meeting already has a summary note — marked completed",
                              extra={"meeting": uuid, "contact": contact_id})
                     return {"meeting": uuid, "status": "completed", "note_id": zm.ghl_note_id, "idempotent": True}
-                note = ghl.create_note(contact_id=contact_id, body=_format_note(zm))
+                # Notes carry the summary only; the raw transcript goes to the
+                # contact's files. Upload first so the summary note can link it —
+                # best effort either way, since the summary is the deliverable and
+                # the transcript must never fail an otherwise-good meeting.
+                transcript_url = _upload_transcript_file(ghl, contact_id, zm)
+                note = ghl.create_note(contact_id=contact_id, body=_format_note(zm, transcript_url))
                 zm.ghl_note_id = note.get("id")
-                # The full transcript follows the summary as its own note(s), so
-                # the readable summary stays the first thing on the card. Best
-                # effort: the summary is the deliverable, and losing the raw
-                # transcript must never fail an otherwise-successful meeting.
-                for body in _transcript_notes(zm):
-                    try:
-                        ghl.create_note(contact_id=contact_id, body=body)
-                    except Exception as exc:  # noqa: BLE001
-                        log.warning(
-                            "transcript note failed — summary already attached",
-                            extra={"meeting": uuid, "contact": contact_id, "err": str(exc)[:200]},
-                        )
-                        break
+                if not transcript_url:
+                    _post_transcript_notes(ghl, contact_id, zm)
 
                 # --- discovery meeting? build the spec doc + push the PDF into GHL.
                 # Best-effort and self-contained: any failure (incl. a GHL write
                 # error) is swallowed here so it never reaches the outer GHLError
                 # handler, which would retry the whole meeting and double the notes.
-                if settings.spec_builder_enabled and is_spec_meeting(zm.topic):
-                    log.info("spec meeting — building spec + bot prompt, attaching PDFs to GHL",
-                             extra={"meeting": uuid, "contact": contact_id})
+                if settings.spec_builder_enabled:
                     date = (zm.started_at or datetime.utcnow()).strftime("%Y-%m-%d")
                     client_name = extracted_name or None
-                    # Two docs, each self-contained and best-effort: a failure in
-                    # one must not stop the other, and neither may reach the outer
+                    # Each doc is self-contained and best-effort: a failure in one
+                    # must not stop the others, and none may reach the outer
                     # GHLError handler (which would retry and double the summary).
-                    builders = (
-                        ("spec", lambda: build_and_deliver_to_ghl(
-                            ghl, contact_id, zm.transcript or "", client_name=client_name,
-                            employee_name=zm.host_name, date=date)),
-                        ("bot", lambda: build_bot_and_deliver_to_ghl(
-                            ghl, contact_id, zm.transcript or "", client_name=client_name, date=date)),
-                    )
+                    builders = ()
+                    if is_spec_meeting(zm.topic):
+                        builders = (
+                            ("spec", lambda: build_and_deliver_to_ghl(
+                                ghl, contact_id, zm.transcript or "", client_name=client_name,
+                                employee_name=zm.host_name, date=date)),
+                            ("bot", lambda: build_bot_and_deliver_to_ghl(
+                                ghl, contact_id, zm.transcript or "", client_name=client_name, date=date)),
+                        )
+                    elif is_demo_meeting(zm.topic):
+                        # A demo call yields one document: the client-facing spec,
+                        # quoting the prices that were actually said on the call.
+                        builders = (
+                            ("demo-spec", lambda: build_demo_spec_and_deliver_to_ghl(
+                                ghl, contact_id, zm.transcript or "", client_name=client_name,
+                                employee_name=zm.host_name, date=date)),
+                        )
+                    if builders:
+                        log.info("building spec documents for meeting",
+                                 extra={"meeting": uuid, "contact": contact_id,
+                                        "docs": [label for label, _ in builders]})
                     for label, build in builders:
                         try:
                             res = build()

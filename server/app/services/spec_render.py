@@ -59,3 +59,19 @@ def render_spec_pdf(spec: dict) -> bytes:
     pdf = render_pdf_from_html(html)
     log.info("spec pdf rendered", extra={"bytes": len(pdf), "sections": len(spec.get("sections", []))})
     return pdf
+
+
+def render_transcript_pdf(title: str, paragraphs: list[str], subtitle: str = "") -> bytes:
+    """Full transcript → readable branded PDF.
+
+    The transcript lives on the contact as a file rather than as note text, so it
+    needs to be pleasant to open: `paragraphs` is the already-grouped text (see
+    `zoom_meetings._paragraphize`), which is what keeps a wall of unpunctuated
+    speech skimmable.
+    """
+    html = _env().get_template("transcript.html").render(
+        title=title, subtitle=subtitle, paragraphs=paragraphs
+    )
+    pdf = render_pdf_from_html(html)
+    log.info("transcript pdf rendered", extra={"bytes": len(pdf), "paragraphs": len(paragraphs)})
+    return pdf

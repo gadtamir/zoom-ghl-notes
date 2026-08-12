@@ -200,6 +200,260 @@ def generate_spec(
 
 
 # --------------------------------------------------------------------------- #
+#  DEMO-MEETING SPEC  (פגישת הדגמה → מסמך אפיון לקוח)
+# --------------------------------------------------------------------------- #
+
+DEMO_SPEC_SYSTEM_PROMPT = """אתה בונה מסמכי אפיון לקוח עבור More-Than (מורדן) — חברה ישראלית שמקימה
+מערכות CRM, אוטומציות ובוטים ל-WhatsApp לעסקים. גד תמיר מנהל את החברה.
+
+לפניך תמלול מלא של **פגישת הדגמה** — השיחה הראשונה עם לקוח פוטנציאלי. המשימה שלך: להפיק
+ממנו מסמך אפיון מובנה **בעברית בלבד**, שמסכם מה הלקוח צריך ומה הוצע לו.
+
+**הכל נאמר בפגישה.** בפגישת הדגמה של More-Than אומרים ללקוח הכל בקול: מה המחיר החודשי,
+מה המחיר השנתי, מה עולה עם התחייבות לשלושה חודשים ומה בלעדיה, כמה שעות הקמה. לכן כל מספר
+שנכנס למסמך חייב לבוא מהתמלול — **אתה לא מחשב מחירים ולא משלים אותם מהראש**. אם מספר
+נאמר, קח אותו כלשונו. אם באמת לא נאמר, אל תמציא אותו: השמט את השורה.
+
+## שליפת נתונים מהתמלול
+
+- **מספר משתמשים**: חפש אמירות כמו "רק אני", "אני והעובדת", "שני אנשי מכירות". אם נאמר
+  שמישהו **לא** יעבוד במערכת — אל תספור אותו.
+- **שעות הקמה**: הנציג בדרך כלל נוקב במספר שעות או "בנק שעות". תהליך הטמעה רגיל הוא
+  10 שעות — אם נאמר "הטמעה רגילה" בלי מספר, זה המספר. אם נמנו רכיבים (דוחות, חיבורים,
+  גוגל שיטס) — סכום אותם.
+- **מחירים**: קח בדיוק את מה שנאמר — חודשי, שנתי, עם התחייבות ובלי, עלות ההטמעה.
+  אל תמיר, אל תעגל ואל תחשב מחיר חלופי.
+- **צרכים, בעיות, מטרות**: רק מדברים שהלקוח אמר.
+- **החלטות פתוחות**: משהו שלא הוכרע (למשל "לעבור למערכת או להישאר עם הקיימת") — הצג
+  כהחלטה לבירור, לא כעובדה.
+
+## מבנה המסמך
+
+סעיפים לפי הסדר הבא. **דלג על סעיף שאין לו תוכן**, ומספר את הנותרים ברצף מ-1:
+1. פרטי הלקוח והעסק · 2. נתוני העסק (אם יש מספרים — כ-block מסוג kpi) · 3. המצב היום ·
+4. הבעיות · 5. המטרות · 6. הפתרון המוצע · 7. מה מקימים בפועל (זה הלב — פרט אותו הכי
+הרבה, עם subhead לכל תת-נושא) · 8. החלטות וגבולות היקף · 9. מה הלקוח מקבל ·
+10. אחריות הלקוח · 11. תמחור · 12. לוחות זמנים והשלב הבא.
+
+## סוגי ה-blocks ומתי להשתמש בהם
+
+- `paragraph` — טקסט רץ. `subhead` אופציונלי מעליו.
+- `bullets` — רשימה. לכל פריט `lead` (מילה פותחת מודגשת) ו-`text`.
+- `steps` — שלבי תהליך ממוספרים. מצוין לתיאור זרימת מכירה או תהליך עבודה.
+- `pills` — תגיות קצרות. הכי מתאים לשלבי פייפליין ("ליד חדש", "נקבעה שיחה", "נסגר").
+- `kpi` — מספרי מפתח של העסק. לכל פריט `n` (המספר) ו-`l` (התווית). 2-4 פריטים.
+- `table` — טבלה. תא יכול לשאת `flag: true` כדי לסמן אותו באדום.
+- `callout` — הערה או נוסח לדוגמה בתוך תיבה.
+- `note` — הערת סייג אפורה. **כאן מציגים דברים טעוני בדיקה** (ראה כללי הברזל).
+- `options` — תיבות להחלטה פתוחה. לכל פריט `title` ו-`text`. השתמש כשהוצגו שתי חלופות.
+- `pricing` — סעיף התמחור. ראה למטה.
+
+## סעיף התמחור
+
+השתמש ב-block מסוג `pricing`, ומלא אותו **רק ממה שנאמר בפגישה**:
+- `lead` — משפט פתיחה, למשל "התמחור מבוסס על 2 משתמשים. שתי אפשרויות לבחירה:".
+- `plain` — המסלול הרגיל: `title` ("חודש בחודשו"), `price` ("449 ₪"),
+  `price_suffix` ('/ לחודש + מע"מ'), `tagline` ("שני משתמשים · ללא התחייבות"),
+  `rows` (זוגות `k`/`v` — הטמעה חד-פעמית, אופן חישובה, סה"כ חודש ראשון), ו-`footnote`.
+- `featured` — מסלול ההתחייבות, אם הוצג. אותם שדות, בתוספת `tag` ("מומלץ").
+- `note` — תמחור הבוט והטלפוניה, אם נאמר.
+אם הוצג רק מסלול אחד — השמט את `featured`. **בכל מקרה סיים את הסעיף בכך שכל המחירים
+לפני מע"מ**, אם כך נאמר בפגישה.
+
+## כללי ברזל
+
+- **אל תמציא.** מה שלא נאמר בתמלול לא נכנס למסמך. זה גובר על כל כלל אחר כאן.
+- **תקן שגיאות תמלול בשמות**: "מורנית" → אורנית, "סאר"/"סער" → סָעַר, "מורדן" כשם
+  החברה → More-Than. החזר כל תיקון כזה במערך `corrections`.
+- **הפרד עובדה מהחלטה מהמלצה.** מה שסוכם = עובדה; מה שהוצע ולא הוכרע = החלטה;
+  מה שהנציג המליץ = המלצה. אל תציג המלצה כאילו סוכמה.
+- **דברים טעוני בדיקה** — חיבור ל-API, סקרייפינג, שליחה המונית, אינטגרציה למערכת
+  חיצונית — הצג עם `note` שמסייג, ואל תנסח כהבטחה. החזר אותם גם במערך `needs_verification`.
+- **התאמה ללקוח**: אם הלקוח הדגיש פשטות, ליווי צמוד, או שנכווה ממערכת קודמת — נסח
+  `principle` (משפט עיקרון מנחה שילווה את המסמך). אחרת השאר ריק.
+- **מיתוג**: `brand` = "pink" לעסקי קוסמטיקה, יופי, כלות ואירועים; אחרת "blue".
+- עברית בלבד, טון עסקי ותכליתי. אל תשתמש במקף ארוך (—) בתוך ערכי מחיר.
+- **אל תכתוב ~ או ≈ לפני מספר בתוך משפט בעברית** — בטקסט מימין-לשמאל הסימן קופץ
+  לצד השני ומודפס כ-"3≈". כתוב "כ-3 סנט", "כ-60 פניות". (בכרטיסי kpi זה מטופל בעיצוב,
+  אבל עדיף "כ-" גם שם.)
+"""
+
+_DEMO_BLOCK_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "type": {
+            "type": "string",
+            "enum": ["paragraph", "bullets", "steps", "pills", "kpi",
+                     "table", "callout", "note", "options", "pricing"],
+        },
+        "subhead": {"type": "string", "description": "כותרת משנה אופציונלית מעל ה-block"},
+        "text": {"type": "string", "description": "ל-paragraph, callout ו-note"},
+        "items": {
+            "type": "array",
+            "description": (
+                "bullets/steps: {lead,text} · pills: {label} · kpi: {n,l} · options: {title,text}"
+            ),
+            "items": {
+                "type": "object",
+                "properties": {
+                    "lead": {"type": "string"},
+                    "text": {"type": "string"},
+                    "label": {"type": "string", "description": "טקסט של pill"},
+                    "title": {"type": "string", "description": "כותרת תיבת options"},
+                    "n": {"type": "string", "description": "המספר בכרטיס kpi, למשל '~200'"},
+                    "l": {"type": "string", "description": "התווית בכרטיס kpi"},
+                },
+            },
+        },
+        "headers": {"type": "array", "items": {"type": "string"}},
+        "rows": {
+            "type": "array",
+            "description": "שורות טבלה. כל תא = {text, flag?}.",
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}, "flag": {"type": "boolean"}},
+                    "required": ["text"],
+                },
+            },
+        },
+        # --- pricing block ---
+        "lead": {"type": "string", "description": "משפט פתיחה לסעיף התמחור"},
+        "plain": {"$ref": "#/$defs/priceCard"},
+        "featured": {"$ref": "#/$defs/priceCard"},
+        "note_text": {"type": "string", "description": "הערת התמחור בתחתית הסעיף"},
+    },
+    "required": ["type"],
+}
+
+_PRICE_CARD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "למשל 'חודש בחודשו' / 'התחייבות ל-3 חודשים'"},
+        "tag": {"type": "string", "description": "תג קטן, למשל 'מומלץ' (רק בכרטיס המודגש)"},
+        "price": {"type": "string", "description": "המחיר כפי שנאמר, למשל '449 ₪'"},
+        "price_suffix": {"type": "string", "description": "למשל '/ לחודש + מע\"מ'"},
+        "tagline": {"type": "string", "description": "שורת תיאור מתחת למחיר"},
+        "rows": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"k": {"type": "string"}, "v": {"type": "string"}},
+                "required": ["k", "v"],
+            },
+        },
+        "footnote": {"type": "string"},
+    },
+}
+
+_DEMO_SPEC_TOOL = {
+    "name": "emit_demo_spec",
+    "description": "פולט את מסמך האפיון של More-Than שנגזר מפגישת הדגמה.",
+    "input_schema": {
+        "type": "object",
+        "$defs": {"priceCard": _PRICE_CARD_SCHEMA},
+        "properties": {
+            "client_name": {"type": "string"},
+            "domain": {"type": "string", "description": "תחום העסק, למשל 'קוסמטיקה ואיפור כלות'"},
+            "doc_type": {"type": "string", "description": "ברירת מחדל 'אפיון צרכים'"},
+            "title": {"type": "string", "description": "ברירת מחדל 'מסמך אפיון לקוח'"},
+            "subtitle": {"type": "string", "description": "כותרת משנה שמתארת את הפרויקט"},
+            "brand": {"type": "string", "enum": ["blue", "pink"]},
+            "intro": {"type": "string", "description": "תקציר פתיחה: הכאב + מה המערכת תעשה"},
+            "principle": {
+                "type": "string",
+                "description": "עיקרון מנחה, רק אם הלקוח הדגיש פשטות/ליווי/כוויה קודמת. אחרת השאר ריק.",
+            },
+            "sections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "number": {"type": "integer"},
+                        "title": {"type": "string"},
+                        "blocks": {"type": "array", "items": _DEMO_BLOCK_SCHEMA},
+                    },
+                    "required": ["number", "title", "blocks"],
+                },
+            },
+            "footer_note": {"type": "string"},
+            "corrections": {
+                "type": "array",
+                "description": "תיקוני שמות שביצעת, למשל 'מורנית → אורנית'.",
+                "items": {"type": "string"},
+            },
+            "needs_verification": {
+                "type": "array",
+                "description": "דברים שהוצגו אך טעונים בדיקה טכנית לפני שמתחייבים עליהם.",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["client_name", "subtitle", "intro", "sections"],
+    },
+}
+
+
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type((APIConnectionError, RateLimitError, APIError)),
+)
+def generate_demo_spec(
+    transcript: str,
+    client_name: str | None = None,
+    employee_name: str | None = None,
+    meeting_date: str | None = None,
+) -> dict:
+    """Demo-call transcript → structured spec dict for the branded PDF.
+
+    Distinct from `generate_spec` (which works off a formal פגישת אפיון): a demo
+    call states the commercials out loud, so this one is told to lift every price
+    verbatim rather than describe the offer in general terms.
+    """
+    settings = get_settings()
+    client = _get_client()
+
+    hint = []
+    if client_name:
+        hint.append(f"שם הלקוח (מזוהה): {client_name}")
+    if employee_name:
+        hint.append(f"נציג/ת More-Than בפגישה: {employee_name}")
+    if meeting_date:
+        hint.append(f"תאריך הפגישה: {meeting_date}")
+    hint_block = ("\n".join(hint) + "\n\n") if hint else ""
+    user_msg = f"{hint_block}תמלול פגישת ההדגמה:\n\n{transcript}"
+
+    log.info("generate_demo_spec start", extra={"chars": len(transcript), "client": client_name})
+    message = client.messages.create(
+        model=settings.anthropic_model,
+        max_tokens=12000,
+        temperature=0.3,
+        system=[{"type": "text", "text": DEMO_SPEC_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        tools=[_DEMO_SPEC_TOOL],
+        tool_choice={"type": "tool", "name": "emit_demo_spec"},
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    spec = _extract_tool_input(message, "emit_demo_spec")
+    if client_name and not spec.get("client_name"):
+        spec["client_name"] = client_name
+    spec.setdefault("brand", "blue")
+    # The template keys off `accent`; `brand` is the friendlier name the tool uses.
+    spec["accent"] = spec.get("brand", "blue")
+    log.info(
+        "generate_demo_spec done",
+        extra={
+            "sections": len(spec.get("sections", [])),
+            "corrections": len(spec.get("corrections", [])),
+            "in_tokens": message.usage.input_tokens,
+            "out_tokens": message.usage.output_tokens,
+        },
+    )
+    return spec
+
+
+# --------------------------------------------------------------------------- #
 #  BOT PROMPT
 # --------------------------------------------------------------------------- #
 
