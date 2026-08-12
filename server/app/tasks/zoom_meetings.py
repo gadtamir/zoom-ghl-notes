@@ -82,11 +82,19 @@ def _storage_path(meeting_id: str) -> Path:
     return Path(get_settings().upload_dir) / f"zoom-{meeting_id}.m4a"
 
 
-def _format_note(zm: ZoomMeeting, transcript_url: str | None = None) -> str:
+def _format_note(
+    zm: ZoomMeeting,
+    transcript_url: str | None = None,
+    recording_block: str | None = None,
+) -> str:
+    """The one note a meeting leaves on the card: the summary, plus pointers to
+    everything that lives outside it (the recording, the transcript file)."""
     when = zm.started_at.strftime("%Y-%m-%d %H:%M") if zm.started_at else "?"
     host = zm.host_name or zm.host_email or "—"
     title = f"📞 סיכום פגישת זום - {when} ({zm.duration_minutes} דק') - {host}"
     body = f"{title}\n\n{zm.summary or '(אין סיכום זמין)'}"
+    if recording_block:
+        body += f"\n\n{recording_block}"
     # Always link the transcript file from the summary, even though it is also
     # attached to a contact field: if that field doesn't exist in this location,
     # the link in the note is the only thing pointing at the uploaded file.
@@ -151,6 +159,33 @@ def _split_for_notes(body: str, budget: int = TRANSCRIPT_BODY_BUDGET) -> list[st
     if current:
         chunks.append(current)
     return chunks
+
+
+def _recording_block(zm: ZoomMeeting, meeting: dict) -> str | None:
+    """Playback-link block for the summary note, or None if Zoom didn't give one.
+
+    `share_url` comes straight off the webhook/list payload, so nothing extra is
+    stored or fetched — which also means this only applies to meetings processed
+    from now on. Cloud recordings are password-protected by default, so the
+    passcode rides along; without it the link is a dead end for anyone who wasn't
+    on the call.
+
+    This used to be a note of its own, placed above the transcript notes so it
+    wasn't buried under tens of thousands of characters. The transcript no longer
+    lives in notes, so there is nothing left to be buried under — the link is
+    simply part of the summary now, which keeps the card to one note per meeting.
+    """
+    share_url = (meeting.get("share_url") or "").strip()
+    if not share_url:
+        return None
+    lines = [f"🎥 הקלטת הפגישה: {share_url}"]
+    passcode = (meeting.get("recording_play_passcode") or meeting.get("password") or "").strip()
+    if passcode:
+        lines.append(f"סיסמה: {passcode}")
+    days = get_settings().zoom_recording_retention_days
+    if days > 0:
+        lines.append(f"⏳ ההקלטה נמחקת מהזום אוטומטית לאחר {days} יום.")
+    return "\n".join(lines)
 
 
 def _transcript_notes(zm: ZoomMeeting) -> list[str]:
@@ -525,7 +560,10 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
                 # best effort either way, since the summary is the deliverable and
                 # the transcript must never fail an otherwise-good meeting.
                 transcript_url = _upload_transcript_file(ghl, contact_id, zm)
-                note = ghl.create_note(contact_id=contact_id, body=_format_note(zm, transcript_url))
+                note = ghl.create_note(
+                    contact_id=contact_id,
+                    body=_format_note(zm, transcript_url, _recording_block(zm, meeting)),
+                )
                 zm.ghl_note_id = note.get("id")
                 if not transcript_url:
                     _post_transcript_notes(ghl, contact_id, zm)
