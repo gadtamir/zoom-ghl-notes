@@ -29,6 +29,39 @@ from ..services.ghl_client import GHLClient
 log = logging.getLogger(__name__)
 
 
+def upload_pdf_and_attach(
+    ghl: GHLClient, contact_id: str, pdf: bytes, filename: str, field_name: str | None
+) -> str | None:
+    """Upload a PDF to GHL media and, when `field_name` is given, attach it to that
+    contact file field. Returns the hosted URL (or None).
+
+    `field_name=None` uploads without attaching. A file field holds a single
+    value, so pinning every meeting's document to one would mean each meeting
+    silently overwrites the last — callers pass a field only for the one document
+    per contact that the field is actually named for.
+
+    Attaching is best-effort: a missing or unwritable field still leaves the file
+    hosted and its URL returned, so the caller can link it from the note instead
+    of losing it.
+    """
+    url = ghl.media_url(ghl.upload_media(filename, pdf, "application/pdf"))
+    if not url:
+        return None
+    if not field_name:
+        return url
+    try:
+        field = ghl.find_custom_field(field_name, data_type="FILE_UPLOAD")
+        if field:
+            ghl.set_contact_custom_field(contact_id, field["id"], url)
+        else:
+            log.info("file field %r not found — linked in note only", field_name,
+                     extra={"contact": contact_id})
+    except Exception as exc:  # noqa: BLE001 — attaching to the field is a bonus
+        log.warning("PDF field attach failed (linked in note instead): %s",
+                    str(exc)[:200], extra={"contact": contact_id})
+    return url
+
+
 _ZOOM_DT_PREFIX = re.compile(
     r"^\s*\d{4}-\d{2}-\d{2}[\s_T]+\d{1,2}[.\:_]\d{2}([.\:_]\d{2})?\s*[-_]*\s*",
 )

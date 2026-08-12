@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from ..models import Job
 from ..services import spec_client, spec_render, bot_prompt_render
+from .ghl import upload_pdf_and_attach
 
 
 log = logging.getLogger(__name__)
@@ -25,11 +26,27 @@ log = logging.getLogger(__name__)
 # Zoom folder names that mark a discovery/onboarding meeting we should build for.
 _MEETING_MARKERS = ("פגישת אפיון", "הטמעה ראשונה", "פגישת הטמעה")
 
+# A demo/fit call is the *first* meeting with a prospect. It gets its own document
+# because it is the one meeting where the commercials are said out loud — prices,
+# monthly and yearly, with and without the 3-month commitment — so the spec built
+# from it can quote them instead of describing the offer in the abstract.
+_DEMO_MARKERS = ("פגישת הדגמה", "הדגמה", "פגישת התאמה", "התאמה")
+
 
 def is_spec_meeting(topic: str | None) -> bool:
     if not topic:
         return False
     return any(marker in topic for marker in _MEETING_MARKERS)
+
+
+def is_demo_meeting(topic: str | None) -> bool:
+    if not topic:
+        return False
+    # A demo is never also an אפיון/הטמעה meeting; if a title somehow says both,
+    # the explicit spec markers win so we don't build two documents for one call.
+    if is_spec_meeting(topic):
+        return False
+    return any(marker in topic for marker in _DEMO_MARKERS)
 
 
 def _client_name(job: Job) -> str | None:
@@ -43,26 +60,14 @@ def _client_name(job: Job) -> str | None:
 # runtime (GHLClient.find_custom_field) so no ids are hardcoded.
 SPEC_FILE_FIELD_NAME = "מסמך אפיון"
 BOT_FILE_FIELD_NAME = "פרומפט בוט"
+# The demo call gets its own field: it is the one sales conversation per contact,
+# and keeping it separate stops a later אפיון document from overwriting the
+# document the deal was actually closed on.
+DEMO_SPEC_FILE_FIELD_NAME = "אפיון מהשיחת מכירה"
 
 
-def _upload_pdf_and_attach(ghl, contact_id: str, pdf: bytes, filename: str, field_name: str) -> str | None:
-    """Upload a PDF to GHL media and attach it to the contact's `field_name` file
-    field. Returns the hosted URL (or None). Attaching is best-effort — a missing
-    field or a failed attach just means the URL is linked in the note instead."""
-    url = ghl.media_url(ghl.upload_media(filename, pdf, "application/pdf"))
-    if not url:
-        return None
-    try:
-        field = ghl.find_custom_field(field_name, data_type="FILE_UPLOAD")
-        if field:
-            ghl.set_contact_custom_field(contact_id, field["id"], url)
-        else:
-            log.info("file field %r not found — linked in note only", field_name,
-                     extra={"contact": contact_id})
-    except Exception as exc:  # noqa: BLE001 — attaching to the field is a bonus
-        log.warning("PDF field attach failed (linked in note instead): %s",
-                    str(exc)[:200], extra={"contact": contact_id})
-    return url
+# `upload_pdf_and_attach` now lives in tasks/ghl.py so the Zoom pipeline can attach
+# the transcript file through the same helper.
 
 
 def _bot_to_spec_dict(bot: dict, client_name: str, date: str) -> dict:
@@ -121,8 +126,8 @@ def build_bot_and_deliver_to_ghl(
     result["bot"] = bot
     try:
         pdf = spec_render.render_spec_pdf(_bot_to_spec_dict(bot, resolved_name, date))
-        url = _upload_pdf_and_attach(ghl, contact_id, pdf,
-                                     f"פרומפט בוט - {resolved_name} - {date}.pdf", BOT_FILE_FIELD_NAME)
+        url = upload_pdf_and_attach(ghl, contact_id, pdf,
+                                    f"פרומפט בוט - {resolved_name} - {date}.pdf", BOT_FILE_FIELD_NAME)
         result["media_url"] = url
         if url:
             note_lines += ["", f"📎 פרומפט בוט (PDF): {url}"]
@@ -130,6 +135,77 @@ def build_bot_and_deliver_to_ghl(
         log.exception("bot PDF render/upload failed — text note still delivered",
                       extra={"contact": contact_id})
         result["error"] = f"pdf: {exc}"
+
+    result["ok"] = True
+    result["note_addition"] = "\n".join(note_lines).strip()
+    return result
+
+
+def build_demo_spec_and_deliver_to_ghl(
+    ghl,
+    contact_id: str,
+    transcript: str,
+    client_name: str | None,
+    employee_name: str | None,
+    date: str,
+) -> dict:
+    """Turn a demo call into the client-facing spec document and deliver it to GHL.
+
+    Same delivery shape as `build_and_deliver_to_ghl` — branded PDF into the media
+    library, attached to the contact's file field, spec text returned for the note —
+    but driven by the demo-call generator, which lifts the quoted prices verbatim.
+
+    Best-effort throughout: never raises. The text (`note_addition`) is the
+    guaranteed deliverable; the PDF is layered on top.
+    """
+    result: dict = {"ok": False, "note_addition": None, "media_url": None, "error": None}
+    if not (transcript or "").strip():
+        result["error"] = "no transcript"
+        return result
+
+    try:
+        spec = spec_client.generate_demo_spec(
+            transcript=transcript, client_name=client_name,
+            employee_name=employee_name, meeting_date=date,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.exception("demo spec generation failed", extra={"contact": contact_id})
+        result["error"] = f"generation: {exc}"
+        return result
+
+    resolved_name = spec.get("client_name") or client_name or "לקוח"
+    result["spec"] = spec
+
+    url = None
+    try:
+        pdf = spec_render.render_spec_pdf(spec)
+        url = upload_pdf_and_attach(ghl, contact_id, pdf,
+                                    f"אפיון משיחת מכירה - {resolved_name} - {date}.pdf",
+                                    DEMO_SPEC_FILE_FIELD_NAME)
+        result["media_url"] = url
+    except Exception as exc:  # noqa: BLE001 — fall back to text rather than lose the spec
+        log.exception("demo spec PDF render/upload failed — falling back to note text",
+                      extra={"contact": contact_id})
+        result["error"] = f"pdf: {exc}"
+
+    # The document belongs in the contact's files; the note just points at it, so
+    # the summary stays the readable thing on the card. Only when the file route
+    # fails does the full text go into the note — losing the spec is worse.
+    note_lines = [f"📄 אפיון מפגישת הדגמה — {resolved_name} — {date}"]
+    if url:
+        note_lines += ["", f"📎 מסמך אפיון (PDF): {url}"]
+    else:
+        note_lines += ["", spec_to_text(spec)]
+
+    # Kept out of the PDF on purpose: the customer-facing document shouldn't carry
+    # our own bookkeeping, but whoever picks the deal up next needs to see which
+    # names were auto-corrected and what was promised subject to a technical check.
+    if spec.get("corrections"):
+        note_lines += ["", "🔤 תיקוני שמות שבוצעו אוטומטית:"]
+        note_lines += [f"  • {c}" for c in spec["corrections"]]
+    if spec.get("needs_verification"):
+        note_lines += ["", "⚠️ טעון בדיקה לפני התחייבות:"]
+        note_lines += [f"  • {v}" for v in spec["needs_verification"]]
 
     result["ok"] = True
     result["note_addition"] = "\n".join(note_lines).strip()
@@ -168,21 +244,24 @@ def build_and_deliver_to_ghl(
         return result
 
     resolved_name = spec.get("client_name") or client_name or "לקוח"
-    note_lines = [f"📄 אפיון — {resolved_name} — {date}", "", spec_to_text(spec)]
     result["spec"] = spec
 
     # --- PDF → GHL media → attach to the contact's file field (all best-effort) ---
+    url = None
     try:
         pdf = spec_render.render_spec_pdf(spec)
-        url = _upload_pdf_and_attach(ghl, contact_id, pdf,
-                                     f"אפיון - {resolved_name} - {date}.pdf", SPEC_FILE_FIELD_NAME)
+        url = upload_pdf_and_attach(ghl, contact_id, pdf,
+                                    f"אפיון - {resolved_name} - {date}.pdf", SPEC_FILE_FIELD_NAME)
         result["media_url"] = url
-        if url:
-            note_lines += ["", f"📎 מסמך אפיון (PDF): {url}"]
-    except Exception as exc:  # noqa: BLE001 — PDF is a bonus; the text note still delivers
-        log.exception("spec PDF render/upload failed — text note still delivered",
+    except Exception as exc:  # noqa: BLE001 — fall back to text rather than lose the spec
+        log.exception("spec PDF render/upload failed — falling back to note text",
                       extra={"contact": contact_id})
         result["error"] = f"pdf: {exc}"
+
+    # Same rule as the demo document: the file is the deliverable, the note points
+    # at it, and the full text only lands in the note if the file route failed.
+    note_lines = [f"📄 אפיון — {resolved_name} — {date}"]
+    note_lines += ["", f"📎 מסמך אפיון (PDF): {url}"] if url else ["", spec_to_text(spec)]
 
     result["ok"] = True
     result["note_addition"] = "\n".join(note_lines).strip()
