@@ -48,6 +48,12 @@ services:
         value: "500"
       - key: TRANSCRIPT_CHUNK_MINUTES
         value: "10"
+      # Only meetings whose Zoom title names one of these types are transcribed.
+      # Editable here without a code change; "" transcribes everything.
+      - key: ZOOM_MIN_DURATION_MINUTES
+        value: "10"
+      - key: ZOOM_TRANSCRIBE_MEETING_TYPES
+        value: "פגישת התאמה,פגישת הדגמה,פגישת סיכום והתחלת עבודה,פגישת הטמעה ראשונה,פגישת הטמעה שנייה,פגישת הטמעה שניה,פגישת הקמה,פגישת תמיכה טכנית,פגישת אפיון"
       - key: UPLOAD_DIR
         value: /tmp/zoom-ghl-uploads
       # Secrets — set manually in Render dashboard (sync: false keeps them out of the blueprint)
