@@ -73,6 +73,45 @@ def zoom_meetings(token: str | None = Query(default=None), limit: int = 50) -> J
         db.close()
 
 
+@router.get("/zoom/skipped")
+def zoom_skipped(token: str | None = Query(default=None), limit: int = 100) -> JSONResponse:
+    """Meetings the title filter declined to transcribe — the answer to "what did
+    we not process, and should we have?".
+
+    `near_miss` flags a title that names some meeting type we don't recognise;
+    those are the ones worth reading, because they're how a renamed or newly
+    introduced meeting type shows up. Also returns the configured type list, so
+    the filter's behaviour can be checked against it without reading the code.
+    """
+    _auth(token)
+    from ..tasks.zoom_meetings import _LOOKS_LIKE_A_MEETING, _configured_meeting_types, _normalise
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ZoomMeeting)
+            .filter(ZoomMeeting.status == ZoomMeetingStatus.skipped,
+                    ZoomMeeting.error_message.like("meeting type not in transcribe list%"))
+            .order_by(ZoomMeeting.created_at.desc())
+            .limit(max(1, min(limit, 500)))
+            .all()
+        )
+        return JSONResponse({
+            "configured_types": _configured_meeting_types(),
+            "count": len(rows),
+            "skipped_minutes": sum(r.duration_minutes or 0 for r in rows),
+            "meetings": [{
+                "topic": r.topic,
+                "minutes": r.duration_minutes,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "host": r.host_email,
+                "near_miss": bool(_LOOKS_LIKE_A_MEETING.search(_normalise(r.topic))),
+            } for r in rows],
+        })
+    finally:
+        db.close()
+
+
 @router.post("/zoom/recover")
 def zoom_recover(token: str | None = Query(default=None)) -> JSONResponse:
     """Run the poller now instead of waiting for the next 15-min tick. It re-enqueues

@@ -82,6 +82,57 @@ def _storage_path(meeting_id: str) -> Path:
     return Path(get_settings().upload_dir) / f"zoom-{meeting_id}.m4a"
 
 
+def _configured_meeting_types() -> list[str]:
+    raw = get_settings().zoom_transcribe_meeting_types or ""
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+# Titles are typed by hand, so spacing is irregular ("אורית  +  פגישת התאמה") and
+# the separator varies (+, -, <>, :). Only the type phrase is matched, on
+# whitespace-normalised text — nothing else in the title is load-bearing.
+def _normalise(topic: str | None) -> str:
+    return re.sub(r"\s+", " ", (topic or "")).strip()
+
+
+def transcribable_meeting_type(topic: str | None) -> str | None:
+    """The configured meeting type this title names, or None to skip it.
+
+    An empty configuration means "transcribe everything", so the filter can be
+    turned off from the dashboard without a deploy.
+    """
+    types = _configured_meeting_types()
+    if not types:
+        return "(filter disabled)"
+    title = _normalise(topic)
+    # Longest first: "פגישת הטמעה ראשונה" must win over a bare "פגישת הטמעה".
+    for t in sorted(types, key=len, reverse=True):
+        if t in title:
+            return t
+    return None
+
+
+# A title that says "פגישה" but matches no configured type is the shape a renamed
+# or newly-introduced meeting type takes. It is still skipped — the list is the
+# list — but it's logged loudly, because silently dropping a real meeting type for
+# months is the failure mode this filter is most likely to produce.
+_LOOKS_LIKE_A_MEETING = re.compile(r"פגיש[הת]")
+
+
+def _log_skipped_meeting(zm: ZoomMeeting) -> None:
+    near_miss = bool(_LOOKS_LIKE_A_MEETING.search(_normalise(zm.topic)))
+    (log.warning if near_miss else log.info)(
+        "zoom meeting skipped — meeting type not in transcribe list%s",
+        " (NEAR MISS: title names a meeting type we don't recognise)" if near_miss else "",
+        extra={
+            "meeting": zm.zoom_meeting_uuid,
+            "topic": zm.topic,
+            "minutes": zm.duration_minutes,
+            "host": zm.host_email,
+            "started_at": zm.started_at.isoformat() if zm.started_at else None,
+        },
+    )
+
+
 def _format_note(
     zm: ZoomMeeting,
     transcript_url: str | None = None,
@@ -464,6 +515,18 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
             db.commit()
             log.info("zoom meeting skipped — too short", extra={"meeting": uuid})
             return {"meeting": uuid, "status": "skipped", "reason": "too_short"}
+
+        # Decide from the title alone, before anything is downloaded, transcribed
+        # or summarised — those are the two paid steps, and they used to run on
+        # every recording regardless of whether the result was ever used.
+        meeting_type = transcribable_meeting_type(zm.topic)
+        if meeting_type is None:
+            zm.status = ZoomMeetingStatus.skipped
+            zm.error_message = f"meeting type not in transcribe list: {_normalise(zm.topic)!r}"
+            zm.completed_at = datetime.utcnow()
+            db.commit()
+            _log_skipped_meeting(zm)
+            return {"meeting": uuid, "status": "skipped", "reason": "meeting_type_not_wanted"}
 
         audio = next(
             (f for f in meeting.get("recording_files", [])

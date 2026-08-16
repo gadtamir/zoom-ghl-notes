@@ -30,7 +30,18 @@ class Settings(BaseSettings):
     zoom_client_secret: str = ""
     # Webhook Only app: signs every event with HMAC. Empty = /webhooks/zoom rejects all.
     zoom_webhook_secret_token: str = ""
-    zoom_min_duration_minutes: int = 5  # skip meetings shorter than this
+    zoom_min_duration_minutes: int = 10  # skip meetings shorter than this
+    # Only meetings whose Zoom title names one of these types are transcribed.
+    # Everything else — internal calls, ad-hoc "<name>'s Zoom Meeting", follow-up
+    # sessions booked without a type — is left alone before any paid work happens,
+    # which is where most of the transcription bill used to go. Comma-separated so
+    # a new meeting type can be added from the Render dashboard without a deploy;
+    # set to "" to transcribe every meeting (the old behaviour).
+    zoom_transcribe_meeting_types: str = (
+        "פגישת התאמה,פגישת הדגמה,פגישת סיכום והתחלת עבודה,"
+        "פגישת הטמעה ראשונה,פגישת הטמעה שנייה,פגישת הטמעה שניה,"
+        "פגישת הקמה,פגישת תמיכה טכנית,פגישת אפיון"
+    )
     # Zoom finishes the audio-only (M4A) track a while after `recording.completed`
     # fires, so an absent audio file usually means "not ready yet", not "never".
     # Defer (don't terminally skip) up to this many processing attempts — with the
