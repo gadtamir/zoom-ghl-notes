@@ -71,7 +71,8 @@ class CallJobStatus(str, enum.Enum):
     transcribed = "transcribed"
     summarized = "summarized"
     completed = "completed"        # note created in GHL
-    failed = "failed"
+    failed = "failed"              # retries exhausted; the reconciler may still re-enqueue it
+    abandoned = "abandoned"        # reconciler gave up too (MAX_ATTEMPTS); admin alerted once
 
 
 class CallJob(Base):

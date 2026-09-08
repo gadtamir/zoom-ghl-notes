@@ -7,8 +7,12 @@
 > **הפייפליין מרפא את עצמו (מאז 06/2026).** שיחת טלפון שנכשלת מקבלת ניסיונות חוזרים
 > עם backoff, ומשימת `phone_calls.reconcile` (Celery beat, כל שעה) שולחת מחדש לעיבוד
 > כל שיחה תקועה/`failed` עד 5 ניסיונות. כשנגמר קרדיט (429/`insufficient_quota`) נשלח
-> מייל לאדמין דרך Resend. לכן ה-backfill הידני שכאן הוא **גיבוי-אחרון**, לא הצעד
-> הראשון — אם משהו נופל, בדרך כלל הוא יתוקן לבד תוך שעה. הקוד: [server/app/tasks/phone_calls.py](server/app/tasks/phone_calls.py), [server/app/services/notify.py](server/app/services/notify.py).
+> מייל לאדמין דרך Resend. שיחה שעברה 5 ניסיונות עוברת לסטטוס סופי `abandoned` ונשלחת
+> עליה התראה **פעם אחת בלבד** (מייל + SMS עם ה-`call_job_id`). היא לא תנוסה שוב לבד —
+> אחרי שהסיבה תוקנה (למשל קרדיט נטען) מריצים אותה מחדש עם
+> `POST /admin/calls/retry?id=<call_job_id>&token=<ADMIN_API_TOKEN>` (או
+> `GET /admin/calls/failed` כדי לראות מה ננטש). לכן ה-backfill הידני שכאן הוא
+> **גיבוי-אחרון**, לא הצעד הראשון — אם משהו נופל, בדרך כלל הוא יתוקן לבד תוך שעה. הקוד: [server/app/tasks/phone_calls.py](server/app/tasks/phone_calls.py), [server/app/services/notify.py](server/app/services/notify.py).
 
 ## 🆘 הבעיה הנפוצה: "שיחה/פגישה לא תומללה"
 
