@@ -19,7 +19,7 @@ from sqlalchemy import func
 
 from ..config import get_settings
 from ..db import SessionLocal
-from ..models import ZoomMeeting, ZoomMeetingStatus
+from ..models import CallJob, CallJobStatus, ZoomMeeting, ZoomMeetingStatus
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -122,3 +122,79 @@ def zoom_recover(token: str | None = Query(default=None)) -> JSONResponse:
     res = poll_recordings.delay()
     log.info("admin triggered zoom poll", extra={"task_id": res.id})
     return JSONResponse({"triggered": True, "task_id": str(res.id)})
+
+
+# ---- phone calls -----------------------------------------------------------
+# Same idea for the GHL phone-call pipeline: see which calls the reconciler gave
+# up on (`abandoned` — the ones the one-time alert is about), and re-run one
+# after the root cause is fixed (typically: API credit reloaded).
+
+_CALL_PROBLEM_STATUSES = (CallJobStatus.abandoned, CallJobStatus.failed)
+
+
+def _call_row(r: CallJob) -> dict:
+    return {
+        "id": r.id,
+        "message_id": r.ghl_message_id,
+        "contact_id": r.ghl_contact_id,
+        "owner": r.ghl_user_name,
+        "direction": r.direction,
+        "duration_seconds": r.duration_seconds,
+        "call_started_at": r.call_started_at.isoformat() if r.call_started_at else None,
+        "status": _status_value(r.status),
+        "attempts": r.attempts,
+        "error": r.error_message,
+        "note_id": r.ghl_note_id,
+    }
+
+
+@router.get("/calls/summary")
+def calls_summary(token: str | None = Query(default=None)) -> JSONResponse:
+    """Count of phone-call jobs by status."""
+    _auth(token)
+    db = SessionLocal()
+    try:
+        counts = {_status_value(s): n for s, n in
+                  db.query(CallJob.status, func.count()).group_by(CallJob.status).all()}
+        return JSONResponse({s.value: counts.get(s.value, 0) for s in CallJobStatus})
+    finally:
+        db.close()
+
+
+@router.get("/calls/failed")
+def calls_failed(token: str | None = Query(default=None), limit: int = 50) -> JSONResponse:
+    """Calls that are `abandoned` (reconciler gave up, admin was alerted once) or
+    still `failed` (awaiting the reconciler). Newest first, no transcripts."""
+    _auth(token)
+    db = SessionLocal()
+    try:
+        rows = (db.query(CallJob).filter(CallJob.status.in_(_CALL_PROBLEM_STATUSES))
+                .order_by(CallJob.created_at.desc()).limit(max(1, min(limit, 200))).all())
+        return JSONResponse([_call_row(r) for r in rows])
+    finally:
+        db.close()
+
+
+@router.post("/calls/retry")
+def calls_retry(token: str | None = Query(default=None), id: str = Query(...)) -> JSONResponse:
+    """Re-run one call from scratch with a fresh attempt budget. Refuses calls
+    that already produced a note, so this can never double-post."""
+    _auth(token)
+    from ..tasks.phone_calls import process_call_job
+    db = SessionLocal()
+    try:
+        cj = db.query(CallJob).filter(CallJob.id == id).first()
+        if not cj:
+            raise HTTPException(status_code=404, detail="call job not found")
+        if cj.status == CallJobStatus.completed or cj.ghl_note_id:
+            raise HTTPException(status_code=409, detail="already completed — refusing to re-run")
+        cj.status = CallJobStatus.received
+        cj.error_message = None
+        cj.completed_at = None
+        cj.attempts = 0
+        db.commit()
+    finally:
+        db.close()
+    res = process_call_job.delay(id)
+    log.info("admin triggered call retry", extra={"call_job_id": id, "task_id": res.id})
+    return JSONResponse({"triggered": True, "call_job_id": id, "task_id": str(res.id)})

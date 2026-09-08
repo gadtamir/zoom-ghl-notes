@@ -43,7 +43,12 @@ RETRY_BACKOFF_SEC = (60, 300, 900)   # 1m, 5m, 15m
 # Self-healing reconciler. The poller dedups by ghl_message_id against ANY
 # existing CallJob, so a once-failed/stuck call would never be retried by
 # polling alone. The reconciler re-enqueues such calls.
-TERMINAL_STATUSES = (CallJobStatus.completed, CallJobStatus.skipped)
+#
+# `abandoned` is terminal on purpose: once the reconciler gives up on a call it
+# flips it to `abandoned` and alerts the admin ONCE. Before this, the call stayed
+# `failed`, was re-counted on every hourly run, and the admin got the same
+# "N calls failed permanently" email/SMS every hour for a week.
+TERMINAL_STATUSES = (CallJobStatus.completed, CallJobStatus.skipped, CallJobStatus.abandoned)
 MAX_ATTEMPTS = 5                       # give up (and flag) after this many tries
 RECONCILE_LOOKBACK_HOURS = 24 * 7      # only chase calls from the last week
 RECONCILE_MIN_AGE_MINUTES = 30         # don't touch a job that may still be running
@@ -414,14 +419,17 @@ def reconcile_stuck_calls() -> dict:
     ghl_message_id against any existing row. Runs on Celery beat.
 
     Guards against re-processing a job that may still be running (min-age) and
-    against chasing a permanently-broken call forever (MAX_ATTEMPTS).
+    against chasing a permanently-broken call forever (MAX_ATTEMPTS): such a call
+    is moved to the terminal `abandoned` status, so it is flagged exactly once and
+    never re-counted. To retry it after fixing the cause (e.g. credit reloaded),
+    use `POST /admin/calls/retry` or `python -m app.cli retry-call`.
     """
     now = datetime.utcnow()
     cutoff_new = now - timedelta(hours=RECONCILE_LOOKBACK_HOURS)
     cutoff_age = now - timedelta(minutes=RECONCILE_MIN_AGE_MINUTES)
     db = SessionLocal()
     requeued = 0
-    gave_up = 0
+    abandoned: list[str] = []
     try:
         stuck = (
             db.query(CallJob)
@@ -434,7 +442,19 @@ def reconcile_stuck_calls() -> dict:
         )
         for cj in stuck:
             if cj.attempts >= MAX_ATTEMPTS:
-                gave_up += 1
+                cj.status = CallJobStatus.abandoned
+                cj.completed_at = cj.completed_at or now
+                db.commit()
+                log.warning(
+                    "reconcile: giving up on call",
+                    extra={"call_job_id": cj.id, "attempts": cj.attempts, "err": (cj.error_message or "")[:200]},
+                )
+                abandoned.append(
+                    f"- call_job_id={cj.id}  message_id={cj.ghl_message_id}  "
+                    f"contact={cj.ghl_contact_id}  "
+                    f"call={cj.call_started_at.strftime('%Y-%m-%d %H:%M') if cj.call_started_at else '?'}\n"
+                    f"  שגיאה: {(cj.error_message or '?')[:300]}"
+                )
                 continue
             log.info(
                 "reconcile: re-enqueue stuck call",
@@ -445,16 +465,23 @@ def reconcile_stuck_calls() -> dict:
     finally:
         db.close()
 
+    gave_up = len(abandoned)
     if gave_up:
+        # Sent once per call: the rows above are now `abandoned` (terminal), so
+        # the next run won't see them again. No throttle key — a throttle would
+        # silently drop a *different* call abandoned within the same window.
         alert_admin(
             subject=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית",
             body=(
-                f"{gave_up} שיחות עברו {MAX_ATTEMPTS} ניסיונות ועדיין לא תומללו — "
-                f"צריך בדיקה ידנית (scripts/backfill_calls.py).\n"
+                f"{gave_up} שיחות עברו {MAX_ATTEMPTS} ניסיונות ועדיין לא תומללו. "
+                f"זו הודעה חד-פעמית — הן לא ינוסו שוב אוטומטית.\n\n"
+                + "\n".join(abandoned) + "\n\n"
+                f"אחרי שהסיבה תוקנה (למשל קרדיט נטען), להריץ מחדש:\n"
+                f"  POST /admin/calls/retry?id=<call_job_id>&token=...\n"
+                f"או מקומית: scripts/backfill_calls.py --message-id <message_id>\n\n"
                 f"({requeued} שיחות אחרות נשלחו שוב לעיבוד.)"
             ),
-            sms_text=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית וצריכות בדיקה ידנית.",
-            throttle_key="reconcile-gaveup",
+            sms_text=f"⚠️ תמלול פגישות: {gave_up} שיחות נכשלו סופית וצריכות בדיקה ידנית (הודעה חד-פעמית, פרטים במייל).",
         )
 
     summary = {"requeued": requeued, "gave_up": gave_up}

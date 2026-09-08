@@ -265,6 +265,7 @@ def retry_call(id: str = typer.Option(..., "--id", help="CallJob id")) -> None:
         cj.error_message = None
         cj.completed_at = None
         cj.status = CallJobStatus.received
+        cj.attempts = 0   # fresh budget, otherwise the reconciler abandons it again at once
         db.commit()
     finally:
         db.close()
