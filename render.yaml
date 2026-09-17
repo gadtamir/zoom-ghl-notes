@@ -43,7 +43,7 @@ services:
       - key: GHL_API_VERSION
         value: "2021-07-28"
       - key: ADMIN_EMAIL
-        value: gad@morethan.com
+        value: gadtamir1301@gmail.com
       - key: MAX_UPLOAD_MB
         value: "500"
       - key: TRANSCRIPT_CHUNK_MINUTES

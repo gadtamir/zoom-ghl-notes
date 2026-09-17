@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     # disables them entirely (503) so admin is never reachable unprotected.
     admin_api_token: str = ""
 
-    admin_email: str = "gad@morethan.com"
+    admin_email: str = "gadtamir1301@gmail.com"
     resend_api_key: str = ""
     alert_from_email: str = "alerts@morethan.com"   # must be a Resend-verified sender
     admin_sms_phone: str = "0548088154"             # GHL contact to SMS on alerts ("" = off)
