@@ -746,6 +746,16 @@ def poll_recordings() -> dict:
                 stuck_no_audio.add(uuid_)
             else:
                 done.add(uuid_)
+        # A failed meeting is retried on every sweep, which is right after a passing
+        # outage. A failure that is not passing turned this into a loop: every 15
+        # minutes for 48 hours it re-downloaded the recording and re-uploaded it to
+        # OpenAI, and that upload traffic was most of the Render bill. Stop after
+        # zoom_max_attempts runs; `error_message` on the row says what went wrong.
+        done.update(
+            uuid_ for (uuid_,) in db.query(ZoomMeeting.zoom_meeting_uuid)
+            .filter(ZoomMeeting.status == ZoomMeetingStatus.failed,
+                    ZoomMeeting.attempts >= settings.zoom_max_attempts).all()
+        )
 
         recovered = 0
         for m in meetings:

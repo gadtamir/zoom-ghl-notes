@@ -14,15 +14,23 @@ log = logging.getLogger(__name__)
 # OpenAI hard limit is 25 MB. We chunk well below to stay safe with re-encoding overhead.
 _SAFE_CHUNK_MB = 20
 _BYTES_PER_MB = 1024 * 1024
+# gpt-4o-transcribe also rejects audio longer than 1400 s, whatever its size. Zoom's
+# audio-only M4A is small enough that a 25-40 minute meeting stays under 20 MB, so
+# the size check alone sent it whole and got a 400 every time.
+_MAX_SINGLE_SECONDS = 1400
 
 
 def transcribe_audio(audio_path: Path, language: str = "he") -> str:
     size_bytes = audio_path.stat().st_size
     if size_bytes <= _SAFE_CHUNK_MB * _BYTES_PER_MB:
-        return transcribe_file(audio_path, language=language)
+        if _probe_duration_seconds(audio_path) <= _MAX_SINGLE_SECONDS:
+            return transcribe_file(audio_path, language=language)
+        reason = "audio too long for single transcription"
+    else:
+        reason = "audio too large for single transcription"
 
     log.info(
-        "audio too large for single transcription — chunking via ffmpeg",
+        f"{reason} — chunking via ffmpeg",
         extra={"path": str(audio_path), "size_mb": round(size_bytes / _BYTES_PER_MB, 2)},
     )
     return _transcribe_chunked(audio_path, language=language)

@@ -14,7 +14,7 @@ from rich.table import Table
 
 from .auth import generate_api_key
 from .db import Base, SessionLocal, engine
-from .models import CallJob, CallJobStatus, Employee, Job, JobStatus
+from .models import CallJob, CallJobStatus, Employee, Job, JobStatus, ZoomMeeting, ZoomMeetingStatus
 
 
 app = typer.Typer(no_args_is_help=True, add_completion=False)
@@ -272,6 +272,32 @@ def retry_call(id: str = typer.Option(..., "--id", help="CallJob id")) -> None:
     console.print("[cyan]dispatching process_call_job...[/cyan]")
     result = process_call_job(id)
     console.print(result)
+
+
+@app.command(help="Reset Zoom meetings that failed at transcription so the next poll retries them.")
+def reset_failed_zoom() -> None:
+    """For meetings the transcription loop gave up on: the poller skips a failed row
+    once it reaches zoom_max_attempts, so clear the counter and let it run again.
+    Only recordings inside zoom_poll_lookback_hours are re-pulled by the poller."""
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(ZoomMeeting)
+            .filter(ZoomMeeting.status == ZoomMeetingStatus.failed,
+                    ZoomMeeting.error_message.like("transcribe:%"),
+                    ZoomMeeting.recording_deleted.is_(False))
+            .all()
+        )
+        for zm in rows:
+            zm.status = ZoomMeetingStatus.received
+            zm.error_message = None
+            zm.completed_at = None
+            zm.attempts = 0
+            console.print(f"reset {zm.zoom_meeting_uuid}  {zm.topic or ''}")
+        db.commit()
+        console.print(f"[cyan]{len(rows)} meeting(s) reset[/cyan]")
+    finally:
+        db.close()
 
 
 @app.command(help="Discover calls for contacts in a GHL opportunity pipeline. Excludes the listed stage substrings (case-insensitive).")

@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     ghl_call_reconcile_interval_seconds: int = 60 * 60  # 1 hour — re-enqueue stuck calls
     zoom_poll_interval_seconds: int = 15 * 60           # 15 minutes — pull new cloud recordings
     zoom_poll_lookback_hours: int = 48                  # overlap window; dedup is by meeting uuid
+    zoom_max_attempts: int = 6                          # poller stops re-enqueueing a failed meeting after this many runs
 
 
 @lru_cache
