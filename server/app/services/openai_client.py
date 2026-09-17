@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from openai import APIError, APIConnectionError, RateLimitError, OpenAI
+from openai import APIConnectionError, InternalServerError, RateLimitError, OpenAI
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -35,12 +35,14 @@ def _get_client() -> OpenAI:
     reraise=True,
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=2, min=2, max=30),
-    retry=retry_if_exception_type((APIConnectionError, RateLimitError, APIError)),
+    # Transient failures only. APIError also covers 400s, and retrying a request
+    # OpenAI has already rejected just re-uploads the same audio three times.
+    retry=retry_if_exception_type((APIConnectionError, RateLimitError, InternalServerError)),
 )
 def transcribe_file(path: Path, language: str = "he") -> str:
     """Transcribe a single audio file (< 25MB) with gpt-4o-transcribe.
 
-    Retries 3x with exponential backoff on transient API errors.
+    Retries 3x with exponential backoff on connection, rate-limit and 5xx errors.
     """
     client = _get_client()
     log.info("transcribe start", extra={"path": str(path), "size_mb": round(path.stat().st_size / 1024 / 1024, 2)})
