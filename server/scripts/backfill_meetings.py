@@ -93,7 +93,7 @@ def load_env() -> None:
 load_env()
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-opus-4-5")
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 # running cost/usage tallies
 TALLY = {"audio_minutes": 0.0, "in_tokens": 0, "out_tokens": 0}
@@ -149,7 +149,7 @@ def anthropic_message(system: str, user: str, max_tokens: int = 2000) -> tuple[s
     body = json.dumps({
         "model": ANTHROPIC_MODEL,
         "max_tokens": max_tokens,
-        "temperature": 0.3,
+        "thinking": {"type": "disabled"},
         "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": user}],
     }).encode("utf-8")
