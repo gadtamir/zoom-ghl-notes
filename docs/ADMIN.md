@@ -152,7 +152,7 @@ Render מוגדר עם `autoDeploy: true` — push ל-main → build חדש מת
 | API | תעריף משוער | פגישה של שעה |
 |---|---|---|
 | OpenAI `gpt-4o-transcribe` | ~$0.006/דקה | $0.36 |
-| Anthropic `claude-opus-4-5` | ~$15/M input + $75/M output | $0.10-0.20 |
+| Anthropic `claude-sonnet-5` | $2/M input + $10/M output | ~$0.05-0.10 |
 | Render Web Starter | $7/חודש | קבוע |
 | Render Postgres Free | $0 | קבוע (1GB) |
 | Render Redis Free | $0 | קבוע (25MB) |

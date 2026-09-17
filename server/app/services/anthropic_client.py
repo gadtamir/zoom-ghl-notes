@@ -203,8 +203,11 @@ def summarize_meeting(
         # The "פירוט מלא" section is deliberately exhaustive — at 2000 the output
         # was truncated mid-section, losing exactly the requirements it exists to
         # capture. Hebrew also costs noticeably more tokens per word than English.
-        max_tokens=8000,
-        temperature=0.3,
+        # Sonnet 5's tokenizer counts ~30% more tokens than Opus 4.5 did, hence 11000.
+        max_tokens=11000,
+        # Sonnet 5 rejects temperature, and thinks by default — Opus 4.5 never did.
+        # Off keeps the summaries, their cost and their length where they were.
+        thinking={"type": "disabled"},
         system=[
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ],
@@ -281,8 +284,8 @@ def summarize_phone_call(transcript: str, employee_name: str, duration_seconds: 
     log.info("summarize_phone_call start", extra={"chars": len(transcript), "employee": employee_name, "duration": duration_seconds})
     message = client.messages.create(
         model=settings.anthropic_model,
-        max_tokens=1500,
-        temperature=0.3,
+        max_tokens=2000,
+        thinking={"type": "disabled"},
         system=[{"type": "text", "text": PHONE_CALL_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -332,8 +335,8 @@ def transliterate_name(name: str) -> list[str]:
     import json as _json
     message = client.messages.create(
         model=settings.anthropic_model,
-        max_tokens=120,
-        temperature=0.2,
+        max_tokens=160,
+        thinking={"type": "disabled"},
         system=[{"type": "text", "text": _TRANSLITERATE_SYSTEM, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": name.strip()}],
     )

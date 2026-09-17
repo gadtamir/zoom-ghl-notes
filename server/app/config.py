@@ -17,7 +17,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-opus-4-5"
+    anthropic_model: str = "claude-sonnet-5"
 
     ghl_private_token: str = ""
     ghl_location_id: str = ""

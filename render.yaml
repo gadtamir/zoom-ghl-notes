@@ -37,7 +37,7 @@ services:
       - key: LOG_LEVEL
         value: INFO
       - key: ANTHROPIC_MODEL
-        value: claude-opus-4-5
+        value: claude-sonnet-5
       - key: GHL_API_BASE
         value: https://services.leadconnectorhq.com
       - key: GHL_API_VERSION

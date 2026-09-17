@@ -25,7 +25,7 @@ for line in (WORK / ".env").read_text(encoding="utf-8").splitlines():
     if "=" in line and not line.startswith("#"):
         k, _, v = line.partition("="); env[k.strip()] = v.strip()
 KEY = env["ANTHROPIC_API_KEY"]
-MODEL = env.get("ANTHROPIC_MODEL", "claude-opus-4-5")
+MODEL = env.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
 OUTCOMES = ["booked_zoom_with_gad", "booked_webinar", "callback_scheduled",
             "interested_no_commit", "info_sent", "not_relevant",
@@ -73,7 +73,7 @@ def parse_calls(text: str, since: str | None = None) -> list[dict]:
 
 def claude(messages_text: str) -> str:
     body = json.dumps({
-        "model": MODEL, "max_tokens": 4000, "temperature": 0,
+        "model": MODEL, "max_tokens": 5200, "thinking": {"type": "disabled"},
         "system": [{"type": "text", "text": SYS, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": messages_text}],
     }).encode("utf-8")

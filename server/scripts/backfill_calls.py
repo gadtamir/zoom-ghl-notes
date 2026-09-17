@@ -78,7 +78,7 @@ def load_env() -> dict:
 ENV = load_env()
 OPENAI_API_KEY = ENV["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = ENV["ANTHROPIC_API_KEY"]
-ANTHROPIC_MODEL = ENV.get("ANTHROPIC_MODEL", "claude-opus-4-5")
+ANTHROPIC_MODEL = ENV.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 GHL_BASE = ENV["GHL_API_BASE"]
 GHL_LOC = ENV["GHL_LOCATION_ID"]
 GHL_TOK = ENV["GHL_PRIVATE_TOKEN"]
@@ -260,7 +260,7 @@ def summarize_call(transcript: str, employee_name: str, duration_s: int) -> str:
             f"משך השיחה: {duration_s // 60} דקות ו-{duration_s % 60} שניות\n\n"
             f"תמלול השיחה:\n\n{transcript}")
     body = json.dumps({
-        "model": ANTHROPIC_MODEL, "max_tokens": 1500, "temperature": 0.3,
+        "model": ANTHROPIC_MODEL, "max_tokens": 2000, "thinking": {"type": "disabled"},
         "system": [{"type": "text", "text": PHONE_PROMPT, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": user}],
     }).encode("utf-8")
