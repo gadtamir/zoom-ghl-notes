@@ -24,13 +24,13 @@ from ..services.anthropic_client import summarize_phone_call
 from ..services.ghl_client import GHLClient, GHLError
 from ..services.notify import alert_admin, is_credit_error
 from .celery_app import celery_app
-from .transcribe import transcribe_audio
+from .transcribe import _probe_duration_seconds, transcribe_audio
 
 
 log = logging.getLogger(__name__)
 
 
-MIN_DURATION_SEC = 30
+MIN_DURATION_SEC = 60               # calls under a minute aren't worth a summary
 DEFAULT_POLL_WINDOW_HOURS = 12     # generous overlap window — dedup via ghl_message_id
 MAX_CONVS_PER_POLL = 200           # cap to avoid runaway scans on a large workspace
 
@@ -333,6 +333,22 @@ def process_call_job(self, call_job_id: str) -> dict:
         cj.status = CallJobStatus.downloaded
         db.commit()
         log.info("recording saved", extra={"call_job_id": cj.id, "bytes": len(audio), "path": str(audio_path)})
+
+        # GHL often reports duration=None, which lets short calls past the poll
+        # filter — measure the recording itself before paying to transcribe it.
+        if not cj.duration_seconds:
+            try:
+                cj.duration_seconds = int(_probe_duration_seconds(audio_path))
+                db.commit()
+            except Exception as exc:  # noqa: BLE001 — unknown length: process it rather than drop it
+                log.warning("could not probe call duration", extra={"call_job_id": cj.id, "err": str(exc)[:200]})
+        if cj.duration_seconds and cj.duration_seconds < MIN_DURATION_SEC:
+            log.info("call shorter than minimum — skipping", extra={"call_job_id": cj.id, "duration": cj.duration_seconds})
+            cj.status = CallJobStatus.skipped
+            cj.error_message = f"too short ({cj.duration_seconds}s < {MIN_DURATION_SEC}s)"
+            cj.completed_at = datetime.utcnow()
+            db.commit()
+            return {"call_job_id": cj.id, "status": "skipped", "reason": "too short"}
 
         try:
             cj.transcript = transcribe_audio(audio_path, language="he")
