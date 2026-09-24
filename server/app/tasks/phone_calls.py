@@ -286,6 +286,13 @@ def process_call_job(self, call_job_id: str) -> dict:
         cj = db.query(CallJob).filter(CallJob.id == call_job_id).first()
         if not cj:
             return {"call_job_id": call_job_id, "status": "not_found"}
+        # A Celery retry scheduled before the reconciler gave up can still fire
+        # afterwards; without this it flips `abandoned` back to `failed` and the
+        # reconciler re-alerts on the same call every hour. Manual retries reset
+        # the status to `received` first, so they are not blocked.
+        if cj.status in (CallJobStatus.completed, CallJobStatus.abandoned):
+            log.info("call_job already terminal — skipping", extra={"call_job_id": cj.id, "status": cj.status.value})
+            return {"call_job_id": cj.id, "status": cj.status.value}
         cj.attempts += 1
         db.commit()
 

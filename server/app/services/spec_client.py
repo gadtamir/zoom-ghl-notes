@@ -181,7 +181,8 @@ def generate_spec(
         max_tokens=11000,
         # Sonnet 5 rejects temperature and thinks by default; the forced tool call
         # needs neither. Token limits are ~30% up for its larger token counts.
-        thinking={"type": "disabled"},
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[{"type": "text", "text": SPEC_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[_SPEC_TOOL],
         tool_choice={"type": "tool", "name": "emit_spec"},
@@ -431,7 +432,8 @@ def generate_demo_spec(
     message = client.messages.create(
         model=settings.anthropic_model,
         max_tokens=16000,
-        thinking={"type": "disabled"},
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[{"type": "text", "text": DEMO_SPEC_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[_DEMO_SPEC_TOOL],
         tool_choice={"type": "tool", "name": "emit_demo_spec"},
@@ -527,7 +529,8 @@ def generate_bot_prompt(transcript: str, client_name: str | None) -> dict:
     message = client.messages.create(
         model=settings.anthropic_model,
         max_tokens=11000,
-        thinking={"type": "disabled"},
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[{"type": "text", "text": BOT_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         tools=[_BOT_TOOL],
         tool_choice={"type": "tool", "name": "emit_bot_prompt"},

@@ -146,6 +146,10 @@ def process_call(
             if existing.status in (CallJobStatus.completed, CallJobStatus.summarized):
                 console.print("[red]already processed — refusing to re-enqueue[/red]")
                 raise typer.Exit(code=1)
+            if existing.status == CallJobStatus.abandoned:
+                existing.status = CallJobStatus.received
+                existing.attempts = 0   # otherwise the worker/reconciler treats it as given up
+                db.commit()
             cj_id = existing.id
         else:
             with GHLClient() as ghl:
