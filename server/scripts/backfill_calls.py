@@ -45,7 +45,7 @@ WORK_DIR.mkdir(parents=True, exist_ok=True)
 STATE_PATH = WORK_DIR / "calls_state.json"
 LOG_PATH = WORK_DIR / "calls_backfill.log"
 
-MIN_DURATION_SEC = 30
+MIN_DURATION_SEC = 60
 CALL_TYPES = {"TYPE_CALL", "TYPE_CAMPAIGN_CALL"}
 TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 CHUNK_MINUTES = 10
