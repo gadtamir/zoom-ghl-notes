@@ -207,7 +207,8 @@ def summarize_meeting(
         max_tokens=11000,
         # Sonnet 5 rejects temperature, and thinks by default — Opus 4.5 never did.
         # Off keeps the summaries, their cost and their length where they were.
-        thinking={"type": "disabled"},
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[
             {"type": "text", "text": SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}
         ],
@@ -285,7 +286,8 @@ def summarize_phone_call(transcript: str, employee_name: str, duration_seconds: 
     message = client.messages.create(
         model=settings.anthropic_model,
         max_tokens=2000,
-        thinking={"type": "disabled"},
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[{"type": "text", "text": PHONE_CALL_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_msg}],
     )
@@ -336,7 +338,8 @@ def transliterate_name(name: str) -> list[str]:
     message = client.messages.create(
         model=settings.anthropic_model,
         max_tokens=160,
-        thinking={"type": "disabled"},
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
         system=[{"type": "text", "text": _TRANSLITERATE_SYSTEM, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": name.strip()}],
     )
