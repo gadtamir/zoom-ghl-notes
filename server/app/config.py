@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     # mini is half the price of gpt-4o-transcribe; switch back from the Render
     # dashboard (no deploy) if Hebrew quality isn't good enough.
     openai_transcribe_model: str = "gpt-4o-mini-transcribe"
+    # Sales meetings (and the spec / bot prompt built from them) are worth the
+    # better model; every meeting whose title contains one of these markers gets
+    # `openai_quality_transcribe_model`. Comma-separated; "" = everything on mini.
+    openai_quality_transcribe_model: str = "gpt-4o-transcribe"
+    quality_transcribe_meeting_markers: str = "הדגמה,התאמה,אפיון"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
     # Phone-call summaries are short and formulaic — Haiku is ~20x cheaper than

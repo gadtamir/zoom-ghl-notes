@@ -56,7 +56,7 @@ def _is_transient(exc: BaseException) -> bool:
     wait=wait_exponential(multiplier=2, min=2, max=30),
     retry=retry_if_exception(_is_transient),
 )
-def transcribe_file(path: Path, language: str = "he") -> str:
+def transcribe_file(path: Path, language: str = "he", model: str | None = None) -> str:
     """Transcribe a single audio file (< 25MB, < 1400 s).
 
     Retries 3x with exponential backoff on connection, rate-limit and 5xx errors.
@@ -65,7 +65,7 @@ def transcribe_file(path: Path, language: str = "he") -> str:
     log.info("transcribe start", extra={"path": str(path), "size_mb": round(path.stat().st_size / 1024 / 1024, 2)})
     with path.open("rb") as f:
         result = client.audio.transcriptions.create(
-            model=transcribe_model(),
+            model=model or transcribe_model(),
             file=f,
             language=language,
             response_format="text",
