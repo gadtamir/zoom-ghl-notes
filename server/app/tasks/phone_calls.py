@@ -296,79 +296,88 @@ def process_call_job(self, call_job_id: str) -> dict:
         cj.attempts += 1
         db.commit()
 
-        try:
-            with GHLClient() as ghl:
-                audio = ghl.download_call_recording(cj.ghl_message_id)
-                # User name is best-effort metadata; a 400/404 here must not kill the job.
-                if cj.ghl_user_id and not cj.ghl_user_name:
-                    try:
-                        user = ghl.get_user(cj.ghl_user_id)
-                        if user:
-                            cj.ghl_user_name = user.get("name") or " ".join(
-                                filter(None, [user.get("firstName"), user.get("lastName")])
-                            )
-                    except GHLError as exc:
-                        log.warning("get_user failed — continuing without name", extra={"call_job_id": cj.id, "user_id": cj.ghl_user_id, "err": str(exc)[:200]})
-        except GHLError as exc:
-            # 422 commonly means: call exists but has no recording (didn't connect,
-            # voicemail without record, externally-imported call, etc.). Mark
-            # as `skipped` so it doesn't show up as a real failure.
-            msg = str(exc)
-            if "422" in msg:
-                log.info("call has no recording — skipping", extra={"call_job_id": cj.id, "ghl_msg": cj.ghl_message_id})
+        # A retry after the summary or the note failed already has the transcript —
+        # don't download and pay to transcribe the same recording again.
+        if (cj.transcript or "").strip():
+            log.info("reusing saved transcript", extra={"call_job_id": cj.id})
+        else:
+            try:
+                with GHLClient() as ghl:
+                    audio = ghl.download_call_recording(cj.ghl_message_id)
+                    # User name is best-effort metadata; a 400/404 here must not kill the job.
+                    if cj.ghl_user_id and not cj.ghl_user_name:
+                        try:
+                            user = ghl.get_user(cj.ghl_user_id)
+                            if user:
+                                cj.ghl_user_name = user.get("name") or " ".join(
+                                    filter(None, [user.get("firstName"), user.get("lastName")])
+                                )
+                        except GHLError as exc:
+                            log.warning("get_user failed — continuing without name", extra={"call_job_id": cj.id, "user_id": cj.ghl_user_id, "err": str(exc)[:200]})
+            except GHLError as exc:
+                # 422 commonly means: call exists but has no recording (didn't connect,
+                # voicemail without record, externally-imported call, etc.). Mark
+                # as `skipped` so it doesn't show up as a real failure.
+                msg = str(exc)
+                if "422" in msg:
+                    log.info("call has no recording — skipping", extra={"call_job_id": cj.id, "ghl_msg": cj.ghl_message_id})
+                    cj.status = CallJobStatus.skipped
+                    cj.error_message = "no recording (HTTP 422)"
+                    cj.completed_at = datetime.utcnow()
+                    db.commit()
+                    return {"call_job_id": cj.id, "status": "skipped", "reason": "no recording"}
+                log.exception("download failed", extra={"call_job_id": cj.id})
+                return _retry_or_fail(self, db, cj, "download", exc)
+            except Exception as exc:
+                log.exception("download failed", extra={"call_job_id": cj.id})
+                return _retry_or_fail(self, db, cj, "download", exc)
+
+            audio_path = _call_storage_path(cj.id)
+            audio_path.parent.mkdir(parents=True, exist_ok=True)
+            audio_path.write_bytes(audio)
+            cj.status = CallJobStatus.downloaded
+            db.commit()
+            log.info("recording saved", extra={"call_job_id": cj.id, "bytes": len(audio), "path": str(audio_path)})
+
+            # GHL often reports duration=None, which lets short calls past the poll
+            # filter — measure the recording itself before paying to transcribe it.
+            if not cj.duration_seconds:
+                try:
+                    cj.duration_seconds = int(_probe_duration_seconds(audio_path))
+                    db.commit()
+                except Exception as exc:  # noqa: BLE001 — unknown length: process it rather than drop it
+                    log.warning("could not probe call duration", extra={"call_job_id": cj.id, "err": str(exc)[:200]})
+            if cj.duration_seconds and cj.duration_seconds < MIN_DURATION_SEC:
+                log.info("call shorter than minimum — skipping", extra={"call_job_id": cj.id, "duration": cj.duration_seconds})
                 cj.status = CallJobStatus.skipped
-                cj.error_message = "no recording (HTTP 422)"
+                cj.error_message = f"too short ({cj.duration_seconds}s < {MIN_DURATION_SEC}s)"
                 cj.completed_at = datetime.utcnow()
                 db.commit()
-                return {"call_job_id": cj.id, "status": "skipped", "reason": "no recording"}
-            log.exception("download failed", extra={"call_job_id": cj.id})
-            return _retry_or_fail(self, db, cj, "download", exc)
-        except Exception as exc:
-            log.exception("download failed", extra={"call_job_id": cj.id})
-            return _retry_or_fail(self, db, cj, "download", exc)
+                return {"call_job_id": cj.id, "status": "skipped", "reason": "too short"}
 
-        audio_path = _call_storage_path(cj.id)
-        audio_path.parent.mkdir(parents=True, exist_ok=True)
-        audio_path.write_bytes(audio)
-        cj.status = CallJobStatus.downloaded
-        db.commit()
-        log.info("recording saved", extra={"call_job_id": cj.id, "bytes": len(audio), "path": str(audio_path)})
-
-        # GHL often reports duration=None, which lets short calls past the poll
-        # filter — measure the recording itself before paying to transcribe it.
-        if not cj.duration_seconds:
             try:
-                cj.duration_seconds = int(_probe_duration_seconds(audio_path))
+                cj.transcript = transcribe_audio(audio_path, language="he", context={"call_job_id": cj.id})
+                cj.status = CallJobStatus.transcribed
                 db.commit()
-            except Exception as exc:  # noqa: BLE001 — unknown length: process it rather than drop it
-                log.warning("could not probe call duration", extra={"call_job_id": cj.id, "err": str(exc)[:200]})
-        if cj.duration_seconds and cj.duration_seconds < MIN_DURATION_SEC:
-            log.info("call shorter than minimum — skipping", extra={"call_job_id": cj.id, "duration": cj.duration_seconds})
-            cj.status = CallJobStatus.skipped
-            cj.error_message = f"too short ({cj.duration_seconds}s < {MIN_DURATION_SEC}s)"
-            cj.completed_at = datetime.utcnow()
-            db.commit()
-            return {"call_job_id": cj.id, "status": "skipped", "reason": "too short"}
+            except Exception as exc:
+                log.exception("transcribe failed", extra={"call_job_id": cj.id})
+                return _retry_or_fail(self, db, cj, "transcribe", exc)
 
-        try:
-            cj.transcript = transcribe_audio(audio_path, language="he")
-            cj.status = CallJobStatus.transcribed
-            db.commit()
-        except Exception as exc:
-            log.exception("transcribe failed", extra={"call_job_id": cj.id})
-            return _retry_or_fail(self, db, cj, "transcribe", exc)
-
-        try:
-            cj.summary = summarize_phone_call(
-                transcript=cj.transcript or "",
-                employee_name=cj.ghl_user_name or "(לא ידוע)",
-                duration_seconds=cj.duration_seconds,
-            )
-            cj.status = CallJobStatus.summarized
-            db.commit()
-        except Exception as exc:
-            log.exception("summarize failed", extra={"call_job_id": cj.id})
-            return _retry_or_fail(self, db, cj, "summarize", exc)
+        if (cj.summary or "").strip():
+            # Only the note failed last time — the summary is already paid for.
+            log.info("reusing saved summary", extra={"call_job_id": cj.id})
+        else:
+            try:
+                cj.summary = summarize_phone_call(
+                    transcript=cj.transcript or "",
+                    employee_name=cj.ghl_user_name or "(לא ידוע)",
+                    duration_seconds=cj.duration_seconds,
+                )
+                cj.status = CallJobStatus.summarized
+                db.commit()
+            except Exception as exc:
+                log.exception("summarize failed", extra={"call_job_id": cj.id})
+                return _retry_or_fail(self, db, cj, "summarize", exc)
 
         try:
             with GHLClient() as ghl:

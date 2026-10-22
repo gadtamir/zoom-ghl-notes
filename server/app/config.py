@@ -16,8 +16,14 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     openai_api_key: str = ""
+    # mini is half the price of gpt-4o-transcribe; switch back from the Render
+    # dashboard (no deploy) if Hebrew quality isn't good enough.
+    openai_transcribe_model: str = "gpt-4o-mini-transcribe"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
+    # Phone-call summaries are short and formulaic — Haiku is ~20x cheaper than
+    # Sonnet and good enough. Meetings and specs stay on `anthropic_model`.
+    anthropic_call_model: str = "claude-haiku-5-5"
 
     ghl_private_token: str = ""
     ghl_location_id: str = ""
@@ -86,6 +92,13 @@ class Settings(BaseSettings):
 
     max_upload_mb: int = 500
     transcript_chunk_minutes: int = 10
+    # Transcription is billed per audio minute, so long silences (hold music
+    # gaps, everyone muted) are cut before upload. Only gaps longer than
+    # `silence_trim_min_seconds` below `silence_trim_threshold_db` are removed,
+    # and half a second of each is kept so words never run together.
+    silence_trim_enabled: bool = True
+    silence_trim_min_seconds: float = 2.0
+    silence_trim_threshold_db: int = -45
     upload_dir: str = "/tmp/zoom-ghl-uploads"
     allowed_extensions: str = "m4a,mp3,mp4,m4v,mov,wav"
 

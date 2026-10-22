@@ -38,6 +38,12 @@ services:
         value: INFO
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-5
+      - key: ANTHROPIC_CALL_MODEL      # phone-call summaries only
+        value: claude-haiku-5-5
+      - key: OPENAI_TRANSCRIBE_MODEL   # set to gpt-4o-transcribe to go back (2x the price)
+        value: gpt-4o-mini-transcribe
+      - key: SILENCE_TRIM_ENABLED      # "false" uploads the audio untrimmed
+        value: "true"
       - key: GHL_API_BASE
         value: https://services.leadconnectorhq.com
       - key: GHL_API_VERSION

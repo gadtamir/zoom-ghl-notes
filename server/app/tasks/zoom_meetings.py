@@ -528,51 +528,56 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
             _log_skipped_meeting(zm)
             return {"meeting": uuid, "status": "skipped", "reason": "meeting_type_not_wanted"}
 
-        audio = next(
-            (f for f in meeting.get("recording_files", [])
-             if f.get("recording_type") == "audio_only" and f.get("download_url")),
-            None,
-        )
-        if not audio:
-            # Zoom finishes the audio-only (M4A) track a while after
-            # `recording.completed` fires, so a missing audio file is almost always
-            # "not ready yet", not "never coming". Skipping *terminally* here is the
-            # bug that made the safety-net poller ignore the meeting forever once the
-            # M4A did land. Instead leave it non-terminal so the poller re-enqueues it
-            # on its next sweep (by then the file is there), and only give up — a
-            # genuinely audio-less recording — after enough attempts.
-            if zm.attempts < settings.zoom_audio_wait_max_attempts:
-                zm.status = ZoomMeetingStatus.received
-                zm.error_message = f"audio_only not ready yet (attempt {zm.attempts})"
+        # A retry after the summary or the note failed already has the transcript —
+        # don't download and pay to transcribe the same recording again.
+        if (zm.transcript or "").strip():
+            log.info("reusing saved transcript", extra={"meeting": uuid})
+        else:
+            audio = next(
+                (f for f in meeting.get("recording_files", [])
+                 if f.get("recording_type") == "audio_only" and f.get("download_url")),
+                None,
+            )
+            if not audio:
+                # Zoom finishes the audio-only (M4A) track a while after
+                # `recording.completed` fires, so a missing audio file is almost always
+                # "not ready yet", not "never coming". Skipping *terminally* here is the
+                # bug that made the safety-net poller ignore the meeting forever once the
+                # M4A did land. Instead leave it non-terminal so the poller re-enqueues it
+                # on its next sweep (by then the file is there), and only give up — a
+                # genuinely audio-less recording — after enough attempts.
+                if zm.attempts < settings.zoom_audio_wait_max_attempts:
+                    zm.status = ZoomMeetingStatus.received
+                    zm.error_message = f"audio_only not ready yet (attempt {zm.attempts})"
+                    db.commit()
+                    log.info("zoom meeting deferred — audio not ready",
+                             extra={"meeting": uuid, "attempts": zm.attempts})
+                    return {"meeting": uuid, "status": "deferred", "reason": "audio_not_ready"}
+                zm.status = ZoomMeetingStatus.skipped
+                zm.error_message = "no audio_only recording file after retries"
+                zm.completed_at = datetime.utcnow()
                 db.commit()
-                log.info("zoom meeting deferred — audio not ready",
+                log.info("zoom meeting skipped — no audio file after retries",
                          extra={"meeting": uuid, "attempts": zm.attempts})
-                return {"meeting": uuid, "status": "deferred", "reason": "audio_not_ready"}
-            zm.status = ZoomMeetingStatus.skipped
-            zm.error_message = "no audio_only recording file after retries"
-            zm.completed_at = datetime.utcnow()
+                return {"meeting": uuid, "status": "skipped", "reason": "no_audio"}
+
+            # --- download (streamed to disk; the token is scoped to this recording) ---
+            audio_path = _storage_path(zm.id)
+            try:
+                from ..services.zoom_client import download_with_token
+
+                download_with_token(audio["download_url"], download_token, audio_path)
+            except Exception as exc:
+                return _retry_or_fail(self, db, zm, "download", exc)
+            zm.status = ZoomMeetingStatus.downloaded
             db.commit()
-            log.info("zoom meeting skipped — no audio file after retries",
-                     extra={"meeting": uuid, "attempts": zm.attempts})
-            return {"meeting": uuid, "status": "skipped", "reason": "no_audio"}
 
-        # --- download (streamed to disk; the token is scoped to this recording) ---
-        audio_path = _storage_path(zm.id)
-        try:
-            from ..services.zoom_client import download_with_token
-
-            download_with_token(audio["download_url"], download_token, audio_path)
-        except Exception as exc:
-            return _retry_or_fail(self, db, zm, "download", exc)
-        zm.status = ZoomMeetingStatus.downloaded
-        db.commit()
-
-        try:
-            zm.transcript = transcribe_audio(audio_path, language="he")
-            zm.status = ZoomMeetingStatus.transcribed
-            db.commit()
-        except Exception as exc:
-            return _retry_or_fail(self, db, zm, "transcribe", exc)
+            try:
+                zm.transcript = transcribe_audio(audio_path, language="he", context={"meeting": uuid})
+                zm.status = ZoomMeetingStatus.transcribed
+                db.commit()
+            except Exception as exc:
+                return _retry_or_fail(self, db, zm, "transcribe", exc)
 
         try:
             summary, extracted_name = summarize_meeting(zm.transcript or "", zm.host_name or "(לא ידוע)", zm.topic)

@@ -144,8 +144,8 @@ def _cleanup_audio(audio_path: Path, job_id: str) -> None:
 
 
 def _stage_transcribe(db: Session, job: Job, audio_path: Path) -> str:
-    """Transcribe with OpenAI gpt-4o-transcribe. Stores transcript on job."""
-    text = transcribe_audio(audio_path, language="he")
+    """Transcribe with OpenAI (`openai_transcribe_model`). Stores transcript on job."""
+    text = transcribe_audio(audio_path, language="he", context={"job_id": job.id})
     job.transcript = text
     _set_status(db, job, JobStatus.transcribed)
     return text
