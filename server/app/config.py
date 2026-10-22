@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     # better model; every meeting whose title contains one of these markers gets
     # `openai_quality_transcribe_model`. Comma-separated; "" = everything on mini.
     openai_quality_transcribe_model: str = "gpt-4o-transcribe"
-    quality_transcribe_meeting_markers: str = "הדגמה,התאמה,אפיון"
+    quality_transcribe_meeting_markers: str = "הדגמה,התאמה,אפיון,הטמעה ראשונה"
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-sonnet-5"
     # Phone-call summaries are short and formulaic — Haiku is ~20x cheaper than
