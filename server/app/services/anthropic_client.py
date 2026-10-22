@@ -284,7 +284,7 @@ def summarize_phone_call(transcript: str, employee_name: str, duration_seconds: 
     )
     log.info("summarize_phone_call start", extra={"chars": len(transcript), "employee": employee_name, "duration": duration_seconds})
     message = client.messages.create(
-        model=settings.anthropic_model,
+        model=settings.anthropic_call_model or settings.anthropic_model,
         max_tokens=2000,
         # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
         extra_body={"thinking": {"type": "disabled"}},

@@ -58,13 +58,10 @@ DOC_BY_CLASS = {
 
 EMPLOYEE_NAME = "גד טמיר"
 LANGUAGE = "he"
-TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 CHUNK_MINUTES = 10
 MAX_SINGLE_MINUTES = 23  # gpt-4o-transcribe rejects single requests over ~25 min
 SAFE_CHUNK_MB = 20
 BYTES_PER_MB = 1024 * 1024
-# gpt-4o-transcribe list price, USD per audio-minute (for the cost estimate only).
-USD_PER_AUDIO_MINUTE = 0.006
 
 # --- logging -----------------------------------------------------------------
 logging.basicConfig(
@@ -94,6 +91,9 @@ load_env()
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+TRANSCRIBE_MODEL = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+# List price, USD per audio-minute (for the cost estimate only).
+USD_PER_AUDIO_MINUTE = 0.003 if "mini" in TRANSCRIBE_MODEL else 0.006
 
 # running cost/usage tallies
 TALLY = {"audio_minutes": 0.0, "in_tokens": 0, "out_tokens": 0}

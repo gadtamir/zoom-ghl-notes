@@ -47,7 +47,6 @@ LOG_PATH = WORK_DIR / "calls_backfill.log"
 
 MIN_DURATION_SEC = 60
 CALL_TYPES = {"TYPE_CALL", "TYPE_CAMPAIGN_CALL"}
-TRANSCRIBE_MODEL = "gpt-4o-transcribe"
 CHUNK_MINUTES = 10
 MAX_SINGLE_MINUTES = 23
 SAFE_CHUNK_MB = 20
@@ -79,6 +78,8 @@ ENV = load_env()
 OPENAI_API_KEY = ENV["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = ENV["ANTHROPIC_API_KEY"]
 ANTHROPIC_MODEL = ENV.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+TRANSCRIBE_MODEL = os.environ.get("OPENAI_TRANSCRIBE_MODEL") or ENV.get("OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+USD_PER_AUDIO_MINUTE = 0.003 if "mini" in TRANSCRIBE_MODEL else 0.006  # cost estimate only
 GHL_BASE = ENV["GHL_API_BASE"]
 GHL_LOC = ENV["GHL_LOCATION_ID"]
 GHL_TOK = ENV["GHL_PRIVATE_TOKEN"]
@@ -490,7 +491,7 @@ def main() -> None:
         log.info("=" * 60)
         log.info("DONE. noted=%d skipped=%d failed=%d (of %d)",
                  results.count("done"), results.count("skipped"), results.count("failed"), len(ids))
-        log.info("audio minutes: %.1f → est OpenAI ~$%.2f", TALLY["audio_minutes"], TALLY["audio_minutes"] * 0.006)
+        log.info("audio minutes: %.1f → est OpenAI ~$%.2f", TALLY["audio_minutes"], TALLY["audio_minutes"] * USD_PER_AUDIO_MINUTE)
         log.info("Claude tokens: in=%d out=%d", TALLY["in_tokens"], TALLY["out_tokens"])
         return
 
@@ -546,7 +547,7 @@ def main() -> None:
     failed = results.count("failed")
     log.info("=" * 60)
     log.info("DONE. noted=%d skipped=%d failed=%d (of %d)", done, skipped, failed, total)
-    log.info("audio minutes: %.1f → est OpenAI ~$%.2f", TALLY["audio_minutes"], TALLY["audio_minutes"] * 0.006)
+    log.info("audio minutes: %.1f → est OpenAI ~$%.2f", TALLY["audio_minutes"], TALLY["audio_minutes"] * USD_PER_AUDIO_MINUTE)
     log.info("Claude tokens: in=%d out=%d", TALLY["in_tokens"], TALLY["out_tokens"])
 
 

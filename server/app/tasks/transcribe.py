@@ -1,4 +1,4 @@
-"""Transcribe stage: split if needed (streaming via ffmpeg), call OpenAI, concat."""
+"""Transcribe stage: trim + compress, split if needed (streaming via ffmpeg), call OpenAI, concat."""
 
 import logging
 import subprocess
@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from ..config import get_settings
-from ..services.openai_client import transcribe_file
+from ..services.openai_client import USD_PER_AUDIO_MINUTE, transcribe_file, transcribe_model
 
 
 log = logging.getLogger(__name__)
@@ -18,12 +18,78 @@ _BYTES_PER_MB = 1024 * 1024
 # audio-only M4A is small enough that a 25-40 minute meeting stays under 20 MB, so
 # the size check alone sent it whole and got a 400 every time.
 _MAX_SINGLE_SECONDS = 1400
+# If trimming removes more than this share of a recording, the threshold almost
+# certainly caught quiet speech rather than silence — upload it untrimmed instead.
+_MAX_TRIM_RATIO = 0.6
 
 
-def transcribe_audio(audio_path: Path, language: str = "he") -> str:
+def transcribe_audio(audio_path: Path, language: str = "he", context: dict | None = None) -> str:
+    """Transcribe a recording of any length. `context` (e.g. {"call_job_id": ...})
+    is attached to the per-job cost log line."""
+    original_seconds = _probe_duration_seconds(audio_path)
+    with tempfile.TemporaryDirectory(prefix="zghl-prep-") as tmpdir:
+        upload_path, upload_seconds = _prepare_for_upload(audio_path, original_seconds, Path(tmpdir))
+        text = _transcribe_prepared(upload_path, upload_seconds, language)
+
+    model = transcribe_model()
+    log.info(
+        "transcription cost",
+        extra={
+            **(context or {}),
+            "model": model,
+            "audio_seconds": round(original_seconds, 1),
+            "billed_seconds": round(upload_seconds, 1),
+            "trimmed_seconds": round(original_seconds - upload_seconds, 1),
+            "est_cost_usd": round(upload_seconds / 60 * USD_PER_AUDIO_MINUTE.get(model, 0.006), 4),
+        },
+    )
+    return text
+
+
+def _prepare_for_upload(src: Path, src_seconds: float, tmpdir: Path) -> tuple[Path, float]:
+    """Re-encode to mono 16 kHz AAC (a phone WAV shrinks ~10x, cutting Render egress)
+    and drop long silences (transcription is billed per minute). Never fatal: any
+    ffmpeg trouble falls back to uploading the original file as-is."""
+    settings = get_settings()
+    dst = tmpdir / "upload.m4a"
+    try:
+        if settings.silence_trim_enabled:
+            _encode(src, dst, trim=True)
+            dst_seconds = _probe_duration_seconds(dst)
+            if dst_seconds >= src_seconds * (1 - _MAX_TRIM_RATIO):
+                return dst, dst_seconds
+            log.warning(
+                "silence trim removed too much — uploading untrimmed",
+                extra={"audio_seconds": round(src_seconds, 1), "trimmed_to": round(dst_seconds, 1)},
+            )
+        _encode(src, dst, trim=False)
+        return dst, _probe_duration_seconds(dst)
+    except Exception as exc:  # noqa: BLE001 — an optimisation must never fail the job
+        log.warning("audio prep failed — uploading original", extra={"path": str(src), "err": str(exc)[:300]})
+        return src, src_seconds
+
+
+def _encode(src: Path, dst: Path, trim: bool) -> None:
+    settings = get_settings()
+    cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", str(src), "-vn"]
+    if trim:
+        cmd += [
+            "-af",
+            "silenceremove=stop_periods=-1"
+            f":stop_duration={settings.silence_trim_min_seconds}"
+            f":stop_threshold={settings.silence_trim_threshold_db}dB"
+            ":stop_silence=0.5",
+        ]
+    cmd += ["-c:a", "aac", "-b:a", "64k", "-ac", "1", "-ar", "16000", str(dst)]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg prep failed: {result.stderr.strip()[:500]}")
+
+
+def _transcribe_prepared(audio_path: Path, duration: float, language: str) -> str:
     size_bytes = audio_path.stat().st_size
     if size_bytes <= _SAFE_CHUNK_MB * _BYTES_PER_MB:
-        if _probe_duration_seconds(audio_path) <= _MAX_SINGLE_SECONDS:
+        if duration <= _MAX_SINGLE_SECONDS:
             return transcribe_file(audio_path, language=language)
         reason = "audio too long for single transcription"
     else:
@@ -33,7 +99,7 @@ def transcribe_audio(audio_path: Path, language: str = "he") -> str:
         f"{reason} — chunking via ffmpeg",
         extra={"path": str(audio_path), "size_mb": round(size_bytes / _BYTES_PER_MB, 2)},
     )
-    return _transcribe_chunked(audio_path, language=language)
+    return _transcribe_chunked(audio_path, duration, language=language)
 
 
 def _probe_duration_seconds(audio_path: Path) -> float:
@@ -50,7 +116,7 @@ def _probe_duration_seconds(audio_path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def _transcribe_chunked(audio_path: Path, language: str) -> str:
+def _transcribe_chunked(audio_path: Path, duration: float, language: str) -> str:
     """Use ffmpeg's segment muxer to cut the audio without loading it into RAM.
 
     Output chunks are mono / 16 kHz / 96 kbps AAC — well-suited to speech
@@ -59,7 +125,6 @@ def _transcribe_chunked(audio_path: Path, language: str) -> str:
     """
     settings = get_settings()
     chunk_seconds = settings.transcript_chunk_minutes * 60
-    duration = _probe_duration_seconds(audio_path)
     n_chunks = max(1, int((duration + chunk_seconds - 1) // chunk_seconds))
     log.info(
         "ffmpeg segment split",
