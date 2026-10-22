@@ -45,7 +45,7 @@ services:
       - key: OPENAI_QUALITY_TRANSCRIBE_MODEL   # meetings matching the markers below
         value: gpt-4o-transcribe
       - key: QUALITY_TRANSCRIBE_MEETING_MARKERS
-        value: "הדגמה,התאמה,אפיון"
+        value: "הדגמה,התאמה,אפיון,הטמעה ראשונה"
       - key: SILENCE_TRIM_ENABLED      # "false" uploads the audio untrimmed
         value: "true"
       - key: GHL_API_BASE
