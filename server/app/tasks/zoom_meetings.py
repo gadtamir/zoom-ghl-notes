@@ -35,7 +35,7 @@ from .spec_stage import (
     is_demo_meeting,
     is_spec_meeting,
 )
-from .transcribe import transcribe_audio
+from .transcribe import model_for_meeting, transcribe_audio
 
 
 log = logging.getLogger(__name__)
@@ -573,7 +573,9 @@ def process_zoom_recording(self, meeting: dict, download_token: str) -> dict:
             db.commit()
 
             try:
-                zm.transcript = transcribe_audio(audio_path, language="he", context={"meeting": uuid})
+                zm.transcript = transcribe_audio(
+                    audio_path, language="he", context={"meeting": uuid}, model=model_for_meeting(zm.topic),
+                )
                 zm.status = ZoomMeetingStatus.transcribed
                 db.commit()
             except Exception as exc:

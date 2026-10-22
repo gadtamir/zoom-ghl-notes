@@ -20,7 +20,7 @@ from .ghl import attach_note
 from .media import is_audio, is_video, video_to_audio
 from .spec_stage import build_for_job, is_spec_meeting
 from .summarize import summarize_job
-from .transcribe import transcribe_audio
+from .transcribe import model_for_meeting, transcribe_audio
 
 
 log = logging.getLogger(__name__)
@@ -145,7 +145,9 @@ def _cleanup_audio(audio_path: Path, job_id: str) -> None:
 
 def _stage_transcribe(db: Session, job: Job, audio_path: Path) -> str:
     """Transcribe with OpenAI (`openai_transcribe_model`). Stores transcript on job."""
-    text = transcribe_audio(audio_path, language="he", context={"job_id": job.id})
+    text = transcribe_audio(
+        audio_path, language="he", context={"job_id": job.id}, model=model_for_meeting(job.meeting_topic),
+    )
     job.transcript = text
     _set_status(db, job, JobStatus.transcribed)
     return text

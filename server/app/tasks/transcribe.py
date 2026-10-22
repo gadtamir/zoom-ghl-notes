@@ -23,15 +23,26 @@ _MAX_SINGLE_SECONDS = 1400
 _MAX_TRIM_RATIO = 0.6
 
 
-def transcribe_audio(audio_path: Path, language: str = "he", context: dict | None = None) -> str:
+def model_for_meeting(topic: str | None) -> str | None:
+    """The better transcription model for sales meetings, else None (the default)."""
+    settings = get_settings()
+    markers = [m.strip() for m in (settings.quality_transcribe_meeting_markers or "").split(",") if m.strip()]
+    if topic and any(m in topic for m in markers):
+        return settings.openai_quality_transcribe_model
+    return None
+
+
+def transcribe_audio(
+    audio_path: Path, language: str = "he", context: dict | None = None, model: str | None = None,
+) -> str:
     """Transcribe a recording of any length. `context` (e.g. {"call_job_id": ...})
-    is attached to the per-job cost log line."""
+    is attached to the per-job cost log line; `model` overrides the default model."""
     original_seconds = _probe_duration_seconds(audio_path)
     with tempfile.TemporaryDirectory(prefix="zghl-prep-") as tmpdir:
         upload_path, upload_seconds = _prepare_for_upload(audio_path, original_seconds, Path(tmpdir))
-        text = _transcribe_prepared(upload_path, upload_seconds, language)
+        text = _transcribe_prepared(upload_path, upload_seconds, language, model)
 
-    model = transcribe_model()
+    model = model or transcribe_model()
     log.info(
         "transcription cost",
         extra={
@@ -86,11 +97,11 @@ def _encode(src: Path, dst: Path, trim: bool) -> None:
         raise RuntimeError(f"ffmpeg prep failed: {result.stderr.strip()[:500]}")
 
 
-def _transcribe_prepared(audio_path: Path, duration: float, language: str) -> str:
+def _transcribe_prepared(audio_path: Path, duration: float, language: str, model: str | None) -> str:
     size_bytes = audio_path.stat().st_size
     if size_bytes <= _SAFE_CHUNK_MB * _BYTES_PER_MB:
         if duration <= _MAX_SINGLE_SECONDS:
-            return transcribe_file(audio_path, language=language)
+            return transcribe_file(audio_path, language=language, model=model)
         reason = "audio too long for single transcription"
     else:
         reason = "audio too large for single transcription"
@@ -99,7 +110,7 @@ def _transcribe_prepared(audio_path: Path, duration: float, language: str) -> st
         f"{reason} — chunking via ffmpeg",
         extra={"path": str(audio_path), "size_mb": round(size_bytes / _BYTES_PER_MB, 2)},
     )
-    return _transcribe_chunked(audio_path, duration, language=language)
+    return _transcribe_chunked(audio_path, duration, language=language, model=model)
 
 
 def _probe_duration_seconds(audio_path: Path) -> float:
@@ -116,7 +127,7 @@ def _probe_duration_seconds(audio_path: Path) -> float:
     return float(result.stdout.strip())
 
 
-def _transcribe_chunked(audio_path: Path, duration: float, language: str) -> str:
+def _transcribe_chunked(audio_path: Path, duration: float, language: str, model: str | None) -> str:
     """Use ffmpeg's segment muxer to cut the audio without loading it into RAM.
 
     Output chunks are mono / 16 kHz / 96 kbps AAC — well-suited to speech
@@ -155,6 +166,6 @@ def _transcribe_chunked(audio_path: Path, duration: float, language: str) -> str
         for i, chunk_path in enumerate(chunk_files):
             size_mb = round(chunk_path.stat().st_size / _BYTES_PER_MB, 2)
             log.info("transcribing chunk", extra={"i": i, "size_mb": size_mb})
-            parts.append(transcribe_file(chunk_path, language=language))
+            parts.append(transcribe_file(chunk_path, language=language, model=model))
 
     return "\n\n".join(p for p in parts if p)

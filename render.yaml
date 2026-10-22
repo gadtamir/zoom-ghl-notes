@@ -42,6 +42,10 @@ services:
         value: claude-haiku-5-5
       - key: OPENAI_TRANSCRIBE_MODEL   # set to gpt-4o-transcribe to go back (2x the price)
         value: gpt-4o-mini-transcribe
+      - key: OPENAI_QUALITY_TRANSCRIBE_MODEL   # meetings matching the markers below
+        value: gpt-4o-transcribe
+      - key: QUALITY_TRANSCRIBE_MEETING_MARKERS
+        value: "הדגמה,התאמה,אפיון"
       - key: SILENCE_TRIM_ENABLED      # "false" uploads the audio untrimmed
         value: "true"
       - key: GHL_API_BASE
