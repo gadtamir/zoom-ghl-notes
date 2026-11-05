@@ -37,3 +37,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Local transcript exports (customer conversations - never commit)
+transcripts_out/
