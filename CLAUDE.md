@@ -55,6 +55,28 @@ caffeinate -dimsu ./.venv/bin/python scripts/backfill_calls.py \
 - פלט/state/לוגים נכתבים ל-`~/zghl_backfill/` (מחוץ ל-git ול-iCloud). ניתן לשנות עם `ZGHL_WORK_DIR`.
 - ה-`.env` (מפתחות סודיים) **לא** בריפו. צריך להניח אותו ב-`server/.env` — ראה `server/.env.example`.
 
+## 🎥 איזה פגישות זום מתומללות (ולמה פגישה "לא נקלטה")
+- מתומללות **רק** פגישות שהכותרת שלהן מכילה אחד מהסוגים ב-`ZOOM_TRANSCRIBE_MEETING_TYPES`
+  (ב-Render, ברירת מחדל ב-[server/app/config.py](server/app/config.py)): פגישת התאמה, הדגמה,
+  סיכום והתחלת עבודה, הטמעה ראשונה/שנייה, הקמה, תמיכה טכנית, אפיון.
+  **פגישת תפעול לא ברשימה → מדולגת.** להוסיף סוג = לערוך את המשתנה ב-Render (בלי deploy).
+- פגישה בלי לקוח שקיים ב-GHL (רק צוות) = "פנימית" ומדולגת, גם אם הסוג ברשימה.
+- המערכת לא רואה פגישות עתידיות — זום מודיע רק אחרי שההקלטה מוכנה.
+- לראות מה דולג: `GET https://zoom-ghl-server.onrender.com/admin/zoom/skipped?token=<ADMIN_API_TOKEN>`
+  (גם `/admin/zoom/meetings` לכל הפגישות האחרונות + סטטוס).
+
+## ☁️ סשן ענן (Claude Code מהאפליקציה/דפדפן) — מה צריך כדי לבדוק דברים
+בסשן ענן **אין** `.env`, אין גישה ליומן (גוגל/GHL), ואין connector לזום. כדי שאוכל לבדוק בעצמי
+צריך להגדיר בסביבת הענן (תפריט הסביבה בכותרת הסשן → Edit → Network secrets / API credentials),
+ואז **לפתוח סשן חדש** (סשן קיים לא קולט):
+- זום: `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`
+- שרת ה-admin: `ADMIN_API_TOKEN`
+- GHL (אופציונלי): `GHL_PRIVATE_TOKEN`, `GHL_LOCATION_ID`
+- רשת: לאפשר את `zoom-ghl-server.onrender.com`, `api.zoom.us`, `zoom.us`
+  (ב-11/2026 הגישה ל-onrender נחסמה ע"י ה-proxy של הסשן).
+לעולם לא לבקש להדביק מפתחות בצ'אט. אם אין גישה — להגיד בפשטות מה חסר ולתת לגד את הקישור
+לבדוק בעצמו בדפדפן.
+
 ## הגדרה ראשונית במחשב חדש
 ראה **[docs/TEAM_SETUP_HE.md](docs/TEAM_SETUP_HE.md)** — התקנת Python+ffmpeg, venv, וקובץ `.env`.
 
