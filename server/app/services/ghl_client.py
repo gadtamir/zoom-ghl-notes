@@ -168,6 +168,7 @@ class GHLClient:
         limit: int = 100,
         start_after: int | None = None,
         start_after_id: str | None = None,
+        pipeline_stage_id: str | None = None,
     ) -> dict[str, Any]:
         """One page of opportunities. Returns the raw payload incl. `meta.nextPage*`."""
         params: dict[str, Any] = {
@@ -175,6 +176,8 @@ class GHLClient:
             "pipeline_id": pipeline_id,
             "limit": limit,
         }
+        if pipeline_stage_id:
+            params["pipeline_stage_id"] = pipeline_stage_id
         if start_after is not None and start_after_id is not None:
             params["startAfter"] = start_after
             params["startAfterId"] = start_after_id

@@ -4,20 +4,13 @@
 [תמלולי שיחות מכירה (שנסגרו)](https://drive.google.com/drive/folders/11nbJXDvPK-GuBVocN3opr2XHYSulOEri)
 ובו התמלול המלא של פגישות ההדגמה, ההתאמה והסיכום והתחלת עבודה של אותו לקוח, לפי סדר כרונולוגי.
 
-## איך זה עובד מבחינת זמנים
-1. ברגע הסגירה GHL שולח webhook, והשרת רק רושם "לקוח נסגר".
-2. במשך **שעה** לא נכתב כלום, כי ייתכן שסגרת בשיחה שעדיין מתומללת.
-3. אחרי השעה, השרת בודק כל 15 דקות. ברגע שאין ללקוח פגישה שנמצאת באמצע תמלול, נוצר הדוק.
+## איך זה עובד
+1. כל 15 דקות השרת בודק ב-GHL מי עבר לשלב "ליד נסגר" בפייפליין "ליד ראשי" ב-48 השעות האחרונות. **אין צורך בוורקפלואו ב-GHL.**
+2. במשך **שעה** אחרי הסגירה לא נכתב כלום, כי ייתכן שסגרת בשיחה שעדיין מתומללת.
+3. אחרי השעה, ברגע שאין ללקוח פגישה שנמצאת באמצע תמלול, נוצר הדוק.
 4. במשך **24 שעות** מהסגירה, כל תמלול שנכנס באיחור מתווסף לאותו דוק. לא נפתח דוק חדש.
 
-## הקמה ב-GHL (פעם אחת)
-Workflow חדש:
-- **Trigger:** `Pipeline Stage Changed` → Pipeline: `ליד ראשי`, Stage: `ליד נסגר`
-- **Action:** `Webhook` → Method `POST`, URL:
-  ```
-  https://zoom-ghl-server.onrender.com/webhooks/ghl/deal-closed?token=<ADMIN_API_TOKEN>
-  ```
-  את הטוקן לוקחים מ-Render, מהמשתנה `ADMIN_API_TOKEN` של `zoom-ghl-server`. אין צורך להגדיר body, כי GHL שולח את פרטי איש הקשר אוטומטית.
+> אופציונלי: אפשר גם להפעיל את התהליך מוורקפלואו ב-GHL (Webhook מסוג POST ל-`/webhooks/ghl/deal-closed?token=<ADMIN_API_TOKEN>`). זה לא חובה, כי הבדיקה התקופתית מכסה את זה.
 
 ## בדיקה וטיפול ידני
 - **כל הסגירות והלינקים לדוקים:** `GET /admin/deals?token=...`
@@ -32,6 +25,7 @@ Workflow חדש:
 | `CLOSED_DEALS_FOLDER_ID` | התיקייה שלמעלה |
 | `CLOSED_DEALS_INITIAL_WAIT_MINUTES` | `60` |
 | `CLOSED_DEALS_WINDOW_HOURS` | `24` |
+| `CLOSED_DEALS_PIPELINE_NAME` / `CLOSED_DEALS_STAGE_NAME` | `ליד ראשי` / `ליד נסגר` |
 | `CLOSED_DEALS_ENABLED` | `true` (מתג כיבוי) |
 
 ## מגבלות

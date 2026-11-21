@@ -1,9 +1,10 @@
 """Closed deals → one Google Doc of sales-meeting transcripts per client.
 
 Flow:
-  1. A GHL workflow (pipeline "ליד ראשי", stage "ליד נסגר") POSTs the contact to
-     /webhooks/ghl/deal-closed → `register_deal` records a `ClosedDeal`.
-  2. `closed_deals.check` (Celery beat, every 15 min) walks the pending deals.
+  1. `closed_deals.check` polls GHL for opportunities that moved into "ליד נסגר"
+     (pipeline "ליד ראשי") within the lookback and records a `ClosedDeal` for each.
+     (A GHL workflow can also POST to /webhooks/ghl/deal-closed — optional.)
+  2. The same task (Celery beat, every 15 min) walks the pending deals.
      Nothing is written for the first hour after closing — the deal is often closed
      on the call that is still being transcribed. After that the doc is created as
      soon as no matching meeting is still mid-pipeline, and rewritten whenever a new
@@ -140,7 +141,13 @@ def render_doc(name: str, closed_at_il: datetime, meetings: list[_Meeting]) -> s
     )
 
 
-def register_deal(db: Session, contact_id: str, name: str | None, opportunity_id: str | None) -> tuple[ClosedDeal, bool]:
+def register_deal(
+    db: Session,
+    contact_id: str,
+    name: str | None,
+    opportunity_id: str | None,
+    closed_at: datetime | None = None,
+) -> tuple[ClosedDeal, bool]:
     """Record a closed deal. Returns (deal, created). Idempotent per contact within
     the dedupe window."""
     since = datetime.utcnow() - _DEDUPE_WINDOW
@@ -153,6 +160,8 @@ def register_deal(db: Session, contact_id: str, name: str | None, opportunity_id
     if existing:
         return existing, False
     deal = ClosedDeal(ghl_contact_id=contact_id, contact_name=name, ghl_opportunity_id=opportunity_id)
+    if closed_at:
+        deal.closed_at = closed_at
     db.add(deal)
     db.commit()
     db.refresh(deal)
@@ -227,6 +236,77 @@ def process_deal(db: Session, deal: ClosedDeal, now: datetime | None = None, for
     return outcome
 
 
+def _parse_ghl_time(value) -> datetime | None:
+    """GHL timestamps → naive UTC. Accepts ISO strings or epoch millis."""
+    if not value:
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.utcfromtimestamp(value / 1000)
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _resolve_stage(ghl) -> tuple[str, str] | None:
+    """(pipeline_id, stage_id) for the configured closed stage, by name."""
+    s = get_settings()
+    want_p = s.closed_deals_pipeline_name.strip().lower()
+    want_s = s.closed_deals_stage_name.strip().lower()
+    for p in ghl.list_pipelines():
+        if want_p not in (p.get("name") or "").lower():
+            continue
+        for st in p.get("stages", []):
+            if want_s in (st.get("name") or "").lower():
+                return p["id"], st["id"]
+    log.error("closed deals: pipeline/stage not found", extra={
+        "pipeline": s.closed_deals_pipeline_name, "stage": s.closed_deals_stage_name,
+    })
+    return None
+
+
+def discover_closed_deals(db: Session, now: datetime | None = None) -> int:
+    """Register every opportunity that moved into the closed stage within the
+    lookback window. Returns how many new deals were registered."""
+    from ..services.ghl_client import GHLClient
+
+    s = get_settings()
+    now = now or datetime.utcnow()
+    since = now - timedelta(hours=s.closed_deals_poll_lookback_hours)
+    new = 0
+    with GHLClient() as ghl:
+        ids = _resolve_stage(ghl)
+        if not ids:
+            return 0
+        pipeline_id, stage_id = ids
+        start_after = start_after_id = None
+        for _ in range(20):  # hard page cap — the stage is small; never loop forever
+            page = ghl.opportunities_page(
+                pipeline_id=pipeline_id, limit=100, pipeline_stage_id=stage_id,
+                start_after=start_after, start_after_id=start_after_id,
+            )
+            opps = page.get("opportunities", [])
+            for o in opps:
+                if o.get("pipelineStageId") and o.get("pipelineStageId") != stage_id:
+                    continue
+                changed = _parse_ghl_time(o.get("lastStageChangeAt") or o.get("updatedAt"))
+                contact_id = o.get("contactId")
+                if not contact_id or not changed or changed < since:
+                    continue
+                contact = o.get("contact") or {}
+                _, created = register_deal(
+                    db, contact_id, contact.get("name") or None, o.get("id"),
+                    closed_at=min(changed, now),
+                )
+                new += created
+            meta = page.get("meta") or {}
+            if not opps or not meta.get("nextPage"):
+                break
+            start_after, start_after_id = meta.get("startAfter"), meta.get("startAfterId")
+    return new
+
+
 @celery_app.task(name="closed_deals.check")
 def check_closed_deals() -> dict:
     s = get_settings()
@@ -235,6 +315,12 @@ def check_closed_deals() -> dict:
     db = SessionLocal()
     results: dict[str, str] = {}
     try:
+        discovered = 0
+        try:
+            discovered = discover_closed_deals(db)
+        except Exception:
+            db.rollback()
+            log.exception("closed deals: GHL discovery failed")
         pending = db.query(ClosedDeal).filter(ClosedDeal.status == ClosedDealStatus.pending).all()
         for deal in pending:
             try:
@@ -246,6 +332,6 @@ def check_closed_deals() -> dict:
                 db.commit()
                 results[deal.id] = "error"
                 log.exception("closed deal processing failed", extra={"deal": deal.id})
-        return {"checked": len(pending), "results": results}
+        return {"discovered": discovered, "checked": len(pending), "results": results}
     finally:
         db.close()

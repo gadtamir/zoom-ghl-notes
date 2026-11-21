@@ -98,6 +98,12 @@ class Settings(BaseSettings):
     closed_deals_initial_wait_minutes: int = 60
     closed_deals_window_hours: int = 24
     closed_deals_check_interval_seconds: int = 15 * 60
+    # The server finds closed deals itself by polling GHL (no workflow needed):
+    # opportunities in this pipeline/stage whose stage changed within the lookback.
+    # Names are matched as case-insensitive substrings.
+    closed_deals_pipeline_name: str = "ליד ראשי"
+    closed_deals_stage_name: str = "ליד נסגר"
+    closed_deals_poll_lookback_hours: int = 48
     # Guards the GHL webhook (GHL workflows can't sign requests, so the token rides
     # in the URL). Falls back to ADMIN_API_TOKEN when empty.
     deal_closed_webhook_token: str = ""
