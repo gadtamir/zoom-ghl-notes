@@ -168,6 +168,7 @@ class GHLClient:
         limit: int = 100,
         start_after: int | None = None,
         start_after_id: str | None = None,
+        pipeline_stage_id: str | None = None,
     ) -> dict[str, Any]:
         """One page of opportunities. Returns the raw payload incl. `meta.nextPage*`."""
         params: dict[str, Any] = {
@@ -175,6 +176,8 @@ class GHLClient:
             "pipeline_id": pipeline_id,
             "limit": limit,
         }
+        if pipeline_stage_id:
+            params["pipeline_stage_id"] = pipeline_stage_id
         if start_after is not None and start_after_id is not None:
             params["startAfter"] = start_after
             params["startAfterId"] = start_after_id
@@ -248,6 +251,21 @@ class GHLClient:
         if r.status_code != 200:
             raise GHLError(f"get_user {r.status_code}: {r.text[:200]}")
         return r.json()
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def get_contact(self, contact_id: str) -> dict[str, Any] | None:
+        r = self._client.get(f"/contacts/{contact_id}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise GHLError(f"get_contact {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        return data.get("contact", data)
 
     @retry(
         reraise=True,

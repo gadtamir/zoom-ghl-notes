@@ -10,6 +10,7 @@ admin surface is never reachable unprotected. The token is compared in constant
 time. Reads report status only (no transcripts); the one write re-runs the poller,
 which is idempotent (note creation dedupes), so triggering it is always safe.
 """
+import json
 import logging
 import secrets
 
@@ -198,3 +199,65 @@ def calls_retry(token: str | None = Query(default=None), id: str = Query(...)) -
     res = process_call_job.delay(id)
     log.info("admin triggered call retry", extra={"call_job_id": id, "task_id": res.id})
     return JSONResponse({"triggered": True, "call_job_id": id, "task_id": str(res.id)})
+
+
+# --- closed deals → Drive transcript doc ---------------------------------------
+
+def _deal_row(d) -> dict:
+    return {
+        "id": d.id,
+        "contact_id": d.ghl_contact_id,
+        "name": d.contact_name,
+        "closed_at": d.closed_at.isoformat() if d.closed_at else None,
+        "status": _status_value(d.status),
+        "doc": d.gdoc_link,
+        "meetings": len(json.loads(d.included_keys or "[]")),
+        "error": d.error_message,
+    }
+
+
+@router.get("/deals")
+def deals_list(token: str | None = Query(default=None), limit: int = 50) -> JSONResponse:
+    """Closed deals and their transcript docs, newest first."""
+    _auth(token)
+    from ..models import ClosedDeal
+    db = SessionLocal()
+    try:
+        rows = (db.query(ClosedDeal).order_by(ClosedDeal.closed_at.desc())
+                .limit(max(1, min(limit, 200))).all())
+        return JSONResponse([_deal_row(d) for d in rows])
+    finally:
+        db.close()
+
+
+@router.get("/deals/preview")
+def deals_preview(token: str | None = Query(default=None), contact_id: str = Query(...)) -> JSONResponse:
+    """Which sales meetings would go into this contact's doc — read-only."""
+    _auth(token)
+    from ..tasks.closed_deals import collect_meetings
+    db = SessionLocal()
+    try:
+        return JSONResponse([
+            {"key": m.key, "type": m.kind,
+             "started_at": m.started_at.isoformat() if m.started_at else None,
+             "has_transcript": bool(m.transcript), "in_progress": m.in_progress}
+            for m in collect_meetings(db, contact_id)
+        ])
+    finally:
+        db.close()
+
+
+@router.post("/deals/run")
+def deals_run(token: str | None = Query(default=None), contact_id: str = Query(...),
+              name: str | None = Query(default=None)) -> JSONResponse:
+    """Build (or refresh) a contact's transcript doc now, without waiting — for
+    deals that closed before this existed, or to test the setup."""
+    _auth(token)
+    from ..tasks.closed_deals import process_deal, register_deal
+    db = SessionLocal()
+    try:
+        deal, _ = register_deal(db, contact_id, name, None)
+        outcome = process_deal(db, deal, force=True)
+        return JSONResponse({"outcome": outcome, **_deal_row(deal)})
+    finally:
+        db.close()

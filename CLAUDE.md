@@ -14,6 +14,8 @@
 > `GET /admin/calls/failed` כדי לראות מה ננטש). לכן ה-backfill הידני שכאן הוא
 > **גיבוי-אחרון**, לא הצעד הראשון — אם משהו נופל, בדרך כלל הוא יתוקן לבד תוך שעה. הקוד: [server/app/tasks/phone_calls.py](server/app/tasks/phone_calls.py), [server/app/services/notify.py](server/app/services/notify.py).
 
+> **לידים שנסגרו → דוק תמלולים בדרייב:** ראה [docs/CLOSED_DEALS_HE.md](docs/CLOSED_DEALS_HE.md) ([server/app/tasks/closed_deals.py](server/app/tasks/closed_deals.py)).
+
 ## 🆘 הבעיה הנפוצה: "שיחה/פגישה לא תומללה"
 
 כשמבקשים ממך לבדוק למה משהו לא תומלל, או לתקן — זה ה-runbook:

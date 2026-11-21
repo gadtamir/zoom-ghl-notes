@@ -95,6 +95,25 @@ def upload_gdoc(svc, name: str, text: str, parent_id: str) -> dict:
     )
 
 
+def upsert_html_gdoc(name: str, html: str, parent_id: str, file_id: str | None = None) -> dict:
+    """Create a Google Doc from HTML in `parent_id`, or replace the content of
+    `file_id` if given. HTML (not plain text) so headings and RTL survive import.
+    Returns {"id", "webViewLink"}."""
+    from googleapiclient.http import MediaIoBaseUpload
+
+    svc = _service()
+    media = MediaIoBaseUpload(io.BytesIO(html.encode("utf-8")), mimetype="text/html", resumable=False)
+    if file_id:
+        return svc.files().update(
+            fileId=file_id, body={"name": name}, media_body=media,
+            fields="id,webViewLink", supportsAllDrives=True,
+        ).execute()
+    body = {"name": name, "parents": [parent_id], "mimeType": _GDOC_MIME}
+    return svc.files().create(
+        body=body, media_body=media, fields="id,webViewLink", supportsAllDrives=True
+    ).execute()
+
+
 def upload_client_bundle(
     client_name: str,
     date: str,
