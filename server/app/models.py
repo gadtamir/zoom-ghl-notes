@@ -152,3 +152,38 @@ class ZoomMeeting(Base):
     attempts: Mapped[int] = mapped_column(default=0, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ClosedDealStatus(str, enum.Enum):
+    pending = "pending"            # inside the collection window, still watching for transcripts
+    done = "done"                  # window closed; the doc holds everything we found
+    no_meetings = "no_meetings"    # window closed and no sales-meeting transcript was ever found
+
+
+class ClosedDeal(Base):
+    """A lead that reached "ליד נסגר" — we collect its sales-meeting transcripts into
+    one Google Doc. Kept open for a window after closing because the deal is often
+    closed on the very call that hasn't been transcribed yet."""
+
+    __tablename__ = "closed_deals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    ghl_contact_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    ghl_opportunity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    closed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    status: Mapped[ClosedDealStatus] = mapped_column(
+        Enum(ClosedDealStatus, native_enum=False, length=20),
+        default=ClosedDealStatus.pending,
+        nullable=False,
+        index=True,
+    )
+    gdoc_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    gdoc_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # JSON list of "zoom:<id>" / "job:<id>" keys already written to the doc, so a
+    # re-check only rewrites the doc when a new transcript actually showed up.
+    included_keys: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

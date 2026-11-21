@@ -84,6 +84,23 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_refresh_token: str = ""
     gdrive_parent_folder_id: str = ""       # parent folder that holds per-client folders
+    # --- closed deals → Drive transcript doc ---
+    # When an opportunity reaches "ליד נסגר" (pipeline "ליד ראשי"), a GHL workflow
+    # webhook hits /webhooks/ghl/deal-closed and we build one Google Doc per client
+    # with the full transcripts of their sales meetings, in this Drive folder.
+    closed_deals_enabled: bool = True
+    closed_deals_folder_id: str = "11nbJXDvPK-GuBVocN3opr2XHYSulOEri"
+    # Which meetings count as "sales meetings". Matched as substrings of the Zoom
+    # title, like ZOOM_TRANSCRIBE_MEETING_TYPES. Comma-separated.
+    closed_deals_meeting_types: str = "פגישת הדגמה,פגישת התאמה,פגישת סיכום והתחלת עבודה"
+    # A deal is often closed on the very call that is still being transcribed, so
+    # we wait before the first write, then keep re-checking for late transcripts.
+    closed_deals_initial_wait_minutes: int = 60
+    closed_deals_window_hours: int = 24
+    closed_deals_check_interval_seconds: int = 15 * 60
+    # Guards the GHL webhook (GHL workflows can't sign requests, so the token rides
+    # in the URL). Falls back to ADMIN_API_TOKEN when empty.
+    deal_closed_webhook_token: str = ""
     # Shared secret protecting the manual spec-builder web page (/spec/ui).
     spec_ui_token: str = ""
     # Token that guards the /admin endpoints (status + manual recovery). Empty

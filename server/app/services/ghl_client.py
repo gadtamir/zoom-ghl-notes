@@ -255,6 +255,21 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
+    def get_contact(self, contact_id: str) -> dict[str, Any] | None:
+        r = self._client.get(f"/contacts/{contact_id}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise GHLError(f"get_contact {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        return data.get("contact", data)
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
     def contact_notes(self, contact_id: str) -> list[dict[str, Any]]:
         """All notes on a contact. Used to make note creation idempotent — so a
         re-run never posts a second copy of a summary that's already there."""

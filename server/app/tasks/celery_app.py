@@ -11,7 +11,7 @@ celery_app = Celery(
     "zoom_ghl",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.tasks.pipeline", "app.tasks.phone_calls", "app.tasks.zoom_meetings"],
+    include=["app.tasks.pipeline", "app.tasks.phone_calls", "app.tasks.zoom_meetings", "app.tasks.closed_deals"],
 )
 
 celery_app.conf.update(
@@ -47,6 +47,11 @@ celery_app.conf.update(
         "cleanup-zoom-recordings": {
             "task": "zoom_meetings.cleanup_recordings",
             "schedule": settings.zoom_cleanup_interval_seconds,
+        },
+        # Closed deals: build/refresh each client's sales-transcript doc in Drive.
+        "check-closed-deals": {
+            "task": "closed_deals.check",
+            "schedule": settings.closed_deals_check_interval_seconds,
         },
     },
 )
