@@ -95,17 +95,19 @@ class Settings(BaseSettings):
     # Which meetings count as "sales meetings". Matched as substrings of the Zoom
     # title, like ZOOM_TRANSCRIBE_MEETING_TYPES. Comma-separated.
     closed_deals_meeting_types: str = "פגישת הדגמה,פגישת התאמה,פגישת סיכום והתחלת עבודה"
-    # A lead is often moved on the very call that is still being transcribed, so
-    # we wait before the first write, then keep re-checking for late transcripts.
+    # The check runs once a day (hour in UTC; 20 = 22:00/23:00 in Israel). A lead
+    # moved within the last hour is left for the next run — its call may still be
+    # transcribing. The doc stays open for the window so a reason field filled in
+    # a day or two later still makes it in.
+    closed_deals_check_hour_utc: int = 20
     closed_deals_initial_wait_minutes: int = 60
-    closed_deals_window_hours: int = 24
-    closed_deals_check_interval_seconds: int = 15 * 60
+    closed_deals_window_hours: int = 72
     # The server finds these leads itself by polling GHL (no workflow needed):
     # opportunities in the pipeline/stage whose stage changed within the lookback.
     closed_deals_pipeline_name: str = "ליד ראשי"
     closed_deals_stage_name: str = "ליד נסגר"
     closed_deals_lost_stage_name: str = "לא רלוונטי"
-    closed_deals_poll_lookback_hours: int = 48
+    closed_deals_poll_lookback_hours: int = 72
     # Opportunity custom fields (by name) holding the reason.
     closed_deals_won_reason_field: str = "למה הליד נסגר"
     closed_deals_lost_reason_field: str = "למה הליד לא נסגר"

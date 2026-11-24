@@ -266,3 +266,84 @@ def deals_run(token: str | None = Query(default=None), contact_id: str = Query(.
         return JSONResponse({"result": result, **_deal_row(deal)})
     finally:
         db.close()
+
+
+# Backfill: a page a human can read — who would get a doc, and in which folder —
+# with a button that actually builds them.
+
+_BACKFILL_PAGE = """<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>לידים לתיקיות התמלולים</title><style>
+body{{font-family:system-ui,Arial,sans-serif;margin:24px;color:#1a1a1a;background:#fff}}
+table{{border-collapse:collapse;width:100%;margin:12px 0}}
+th,td{{border-bottom:1px solid #ddd;padding:8px 10px;text-align:right;vertical-align:top}}
+th{{background:#f5f5f5}} .muted{{color:#777}} .warn{{color:#b45309}}
+button{{font-size:16px;padding:10px 18px;cursor:pointer}}
+</style></head><body>{body}</body></html>"""
+
+
+@router.get("/deals/backfill")
+def deals_backfill_preview(token: str | None = Query(default=None), days: int = Query(default=14, ge=1, le=120)):
+    """Read-only preview: leads moved to won/lost in the last `days` days that have
+    a sales meeting on record, and the folder each doc would go to."""
+    _auth(token)
+    import html as _html
+    from datetime import datetime, timedelta
+
+    from fastapi.responses import HTMLResponse
+
+    from ..models import ClosedDeal
+    from ..tasks.closed_deals import OUTCOMES, _il, _meeting_heading, find_candidates
+
+    folder = {"won": "נסגרו", "lost": "לא נסגרו"}
+    db = SessionLocal()
+    try:
+        candidates, truncated = find_candidates(db, datetime.utcnow() - timedelta(days=days))
+        rows = []
+        for c in candidates:
+            existing = (db.query(ClosedDeal)
+                        .filter(ClosedDeal.ghl_opportunity_id == c.opportunity_id, ClosedDeal.outcome == c.outcome)
+                        .first()) if c.opportunity_id else None
+            meetings = "<br>".join(
+                _html.escape(_meeting_heading(m)) + ("" if m.transcript else ' <span class="warn">(עדיין בתמלול)</span>')
+                for m in c.meetings
+            )
+            state = "דוק קיים" if existing and existing.gdoc_id else "ייווצר דוק"
+            rows.append(
+                f"<tr><td>{_html.escape(c.name or c.contact_id)}</td>"
+                f"<td>{folder[c.outcome]}</td><td>{_il(c.changed_at):%d/%m/%Y}</td>"
+                f"<td>{meetings}</td><td>{state}</td></tr>"
+            )
+        won = sum(c.outcome == "won" for c in candidates)
+        body = (
+            f"<h2>לידים שעברו שלב ב-{days} הימים האחרונים ויש להם פגישת מכירה</h2>"
+            f"<p>{won} ל\"נסגרו\" · {len(candidates) - won} ל\"לא נסגרו\". "
+            f"שלבים: {_html.escape(OUTCOMES['won'].stage_name)} / {_html.escape(OUTCOMES['lost'].stage_name)}.</p>"
+            + ('<p class="warn">השלב גדול מדי ולא נסרק עד הסוף, ייתכן שחסרים לידים.</p>' if truncated else "")
+            + "<table><tr><th>ליד</th><th>תיקייה</th><th>עבר שלב</th><th>פגישות שייכנסו</th><th>מצב</th></tr>"
+            + ("".join(rows) or '<tr><td colspan="5" class="muted">לא נמצאו לידים מתאימים</td></tr>')
+            + "</table>"
+            + (f'<form method="post" action="/admin/deals/backfill?token={_html.escape(token or "")}&days={days}">'
+               f"<button>צור את הדוקים ({len(candidates)})</button></form>"
+               '<p class="muted">הלחיצה יוצרת את הדוקים בדרייב. לידים שכבר יש להם דוק לא יקבלו דוק נוסף.</p>'
+               if candidates else "")
+        )
+        return HTMLResponse(_BACKFILL_PAGE.format(body=body))
+    finally:
+        db.close()
+
+
+@router.post("/deals/backfill")
+def deals_backfill_run(token: str | None = Query(default=None), days: int = Query(default=14, ge=1, le=120)):
+    """Build the docs for the leads the preview lists. Runs in the background."""
+    _auth(token)
+    from fastapi.responses import HTMLResponse
+
+    from ..tasks.closed_deals import backfill_closed_deals
+
+    res = backfill_closed_deals.delay(days)
+    log.info("admin triggered lead docs backfill", extra={"days": days, "task_id": res.id})
+    return HTMLResponse(_BACKFILL_PAGE.format(body=(
+        "<h2>התחלתי ליצור את הדוקים</h2>"
+        "<p>זה רץ ברקע ולוקח כמה דקות. הדוקים יופיעו בתיקיות בדרייב.</p>"
+    )))

@@ -1,7 +1,7 @@
 """Won / lost leads → one Google Doc of sales-meeting transcripts per lead.
 
 Flow:
-  1. `closed_deals.check` (Celery beat, every 15 min) polls GHL for opportunities in
+  1. `closed_deals.check` (Celery beat, once a day) polls GHL for opportunities in
      pipeline "ליד ראשי" that moved into "ליד נסגר" (won) or "לא רלוונטי" (lost)
      within the lookback, and records a `ClosedDeal` for each one that has a sales
      meeting on record. (A GHL workflow can also POST to /webhooks/ghl/deal-closed.)
@@ -9,7 +9,7 @@ Flow:
      after the stage change — the lead is often moved on the call that is still
      being transcribed. After that the doc is created as soon as no matching meeting
      is still mid-pipeline, and rewritten whenever a transcript or the reason field
-     changes, until the window (24h) ends.
+     changes, until the window (72h) ends.
 
 Each doc holds: what the lead said they want solved (extracted by Claude from the
 transcripts), the opportunity's "why it closed / didn't close" field, and the full
@@ -225,19 +225,21 @@ def register_deal(
     closed_at: datetime | None = None,
     outcome: str = WON,
 ) -> tuple[ClosedDeal, bool]:
-    """Record a won/lost lead. Returns (deal, created). Idempotent per contact and
-    outcome within the dedupe window."""
-    since = datetime.utcnow() - _DEDUPE_WINDOW
-    existing = (
-        db.query(ClosedDeal)
-        .filter(
-            ClosedDeal.ghl_contact_id == contact_id,
-            ClosedDeal.outcome == outcome,
-            ClosedDeal.closed_at >= since,
+    """Record a won/lost lead. Returns (deal, created). Idempotent per opportunity
+    and outcome, or per contact and outcome within the dedupe window."""
+    q = db.query(ClosedDeal).filter(ClosedDeal.outcome == outcome)
+    existing = None
+    if opportunity_id:
+        # Same opportunity, same outcome → same doc, however long ago (a backfill
+        # run twice must not write everything twice).
+        existing = q.filter(ClosedDeal.ghl_opportunity_id == opportunity_id).first()
+    if not existing:
+        since = datetime.utcnow() - _DEDUPE_WINDOW
+        existing = (
+            q.filter(ClosedDeal.ghl_contact_id == contact_id, ClosedDeal.closed_at >= since)
+            .order_by(ClosedDeal.closed_at.desc())
+            .first()
         )
-        .order_by(ClosedDeal.closed_at.desc())
-        .first()
-    )
     if existing:
         if opportunity_id and not existing.ghl_opportunity_id:
             existing.ghl_opportunity_id = opportunity_id
@@ -436,24 +438,33 @@ def _resolve_stages(ghl) -> tuple[str, dict[str, str]] | None:
     return None
 
 
-def discover_closed_deals(db: Session, now: datetime | None = None) -> int:
-    """Register every opportunity that moved into the won or lost stage within the
-    lookback window and has a sales meeting on record. Returns the number of new
-    registrations.
+@dataclass
+class Candidate:
+    outcome: str
+    contact_id: str
+    opportunity_id: str | None
+    name: str | None
+    changed_at: datetime          # naive UTC — when the stage last changed
+    meetings: list[_Meeting]
+
+
+def find_candidates(db: Session, since: datetime, now: datetime | None = None) -> tuple[list[Candidate], bool]:
+    """Opportunities that moved into the won or lost stage since `since` and have
+    a sales meeting on record. Read-only. Returns (candidates, truncated) —
+    `truncated` is True if a stage had more pages than we are willing to scan.
 
     The meeting check keeps "לא רלוונטי" (mostly leads who never had a meeting)
-    from flooding the table; a meeting that lands later is picked up by a later
-    poll, as long as it is inside the lookback."""
+    out; a meeting that lands later is picked up by a later poll, as long as it
+    is inside the lookback."""
     from ..services.ghl_client import GHLClient
 
-    s = get_settings()
     now = now or datetime.utcnow()
-    since = now - timedelta(hours=s.closed_deals_poll_lookback_hours)
-    new = 0
+    out: list[Candidate] = []
+    truncated = False
     with GHLClient() as ghl:
         resolved = _resolve_stages(ghl)
         if not resolved:
-            return 0
+            return [], False
         pipeline_id, stage_ids = resolved
         for outcome, stage_id in stage_ids.items():
             start_after = start_after_id = None
@@ -470,20 +481,68 @@ def discover_closed_deals(db: Session, now: datetime | None = None) -> int:
                     contact_id = o.get("contactId")
                     if not contact_id or not changed or changed < since:
                         continue
-                    if not collect_meetings(db, contact_id):
+                    meetings = collect_meetings(db, contact_id)
+                    if not meetings:
                         continue
-                    _, created = register_deal(
-                        db, contact_id, (o.get("contact") or {}).get("name") or None, o.get("id"),
-                        closed_at=min(changed, now), outcome=outcome,
-                    )
-                    new += created
+                    out.append(Candidate(
+                        outcome=outcome, contact_id=contact_id, opportunity_id=o.get("id"),
+                        name=(o.get("contact") or {}).get("name") or None,
+                        changed_at=min(changed, now), meetings=meetings,
+                    ))
                 meta = page.get("meta") or {}
                 if not opps or not meta.get("nextPage"):
                     break
                 start_after, start_after_id = meta.get("startAfter"), meta.get("startAfterId")
                 if page_no == _MAX_PAGES - 1:
+                    truncated = True
                     log.warning("lead docs: page cap hit, stage not fully scanned", extra={"outcome": outcome})
+    out.sort(key=lambda c: c.changed_at, reverse=True)
+    return out, truncated
+
+
+def discover_closed_deals(db: Session, now: datetime | None = None, lookback_hours: int | None = None) -> int:
+    """Register every candidate inside the lookback. Returns the number of new
+    registrations."""
+    now = now or datetime.utcnow()
+    hours = lookback_hours or get_settings().closed_deals_poll_lookback_hours
+    candidates, _ = find_candidates(db, now - timedelta(hours=hours), now)
+    new = 0
+    for c in candidates:
+        _, created = register_deal(
+            db, c.contact_id, c.name, c.opportunity_id, closed_at=c.changed_at, outcome=c.outcome,
+        )
+        new += created
     return new
+
+
+def _process_pending(db: Session) -> dict[str, str]:
+    results: dict[str, str] = {}
+    pending = db.query(ClosedDeal).filter(ClosedDeal.status == ClosedDealStatus.pending).all()
+    for deal in pending:
+        try:
+            results[deal.id] = process_deal(db, deal)
+        except Exception as exc:
+            db.rollback()
+            deal.error_message = str(exc)[:1000]
+            deal.updated_at = datetime.utcnow()
+            db.commit()
+            results[deal.id] = "error"
+            log.exception("lead doc processing failed", extra={"deal": deal.id})
+    return results
+
+
+@celery_app.task(name="closed_deals.backfill", time_limit=60 * 60)
+def backfill_closed_deals(days: int) -> dict:
+    """One-off: build docs for leads that moved to won/lost in the last `days`
+    days. Safe to re-run — an opportunity never gets a second doc."""
+    db = SessionLocal()
+    try:
+        discovered = discover_closed_deals(db, lookback_hours=max(1, days) * 24)
+        results = _process_pending(db)
+        log.info("lead docs backfill done", extra={"days": days, "discovered": discovered, "processed": len(results)})
+        return {"discovered": discovered, "results": results}
+    finally:
+        db.close()
 
 
 @celery_app.task(name="closed_deals.check")
@@ -492,7 +551,6 @@ def check_closed_deals() -> dict:
     if not s.closed_deals_enabled:
         return {"status": "disabled"}
     db = SessionLocal()
-    results: dict[str, str] = {}
     try:
         discovered = 0
         try:
@@ -500,17 +558,7 @@ def check_closed_deals() -> dict:
         except Exception:
             db.rollback()
             log.exception("lead docs: GHL discovery failed")
-        pending = db.query(ClosedDeal).filter(ClosedDeal.status == ClosedDealStatus.pending).all()
-        for deal in pending:
-            try:
-                results[deal.id] = process_deal(db, deal)
-            except Exception as exc:
-                db.rollback()
-                deal.error_message = str(exc)[:1000]
-                deal.updated_at = datetime.utcnow()
-                db.commit()
-                results[deal.id] = "error"
-                log.exception("lead doc processing failed", extra={"deal": deal.id})
-        return {"discovered": discovered, "checked": len(pending), "results": results}
+        results = _process_pending(db)
+        return {"discovered": discovered, "checked": len(results), "results": results}
     finally:
         db.close()
