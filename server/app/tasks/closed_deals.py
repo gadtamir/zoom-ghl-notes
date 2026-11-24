@@ -200,7 +200,7 @@ def render_doc(
     blocks = [
         f'<h1 dir="rtl" style="text-align:right">{html.escape(name)}</h1>',
         f"{_P}<b>סטטוס:</b> {outcome.status_line} · {closed_at_il:%d/%m/%Y} · {len(meetings)} פגישות</p>",
-        f"{_H2}למה הוא פנה אלינו</h2>",
+        f"{_H2}למה הלקוח השאיר פרטים</h2>",
         _bullets(pain_points) if pain_points else f"{_P}לא זמין</p>",
         f"{_H2}{outcome.label}</h2>",
         _paragraphs(reason) if reason else f"{_P}השדה לא מולא ב-GHL</p>",
