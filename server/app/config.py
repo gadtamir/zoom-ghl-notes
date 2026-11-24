@@ -84,26 +84,34 @@ class Settings(BaseSettings):
     google_client_secret: str = ""
     google_refresh_token: str = ""
     gdrive_parent_folder_id: str = ""       # parent folder that holds per-client folders
-    # --- closed deals → Drive transcript doc ---
-    # When an opportunity reaches "ליד נסגר" (pipeline "ליד ראשי"), a GHL workflow
-    # webhook hits /webhooks/ghl/deal-closed and we build one Google Doc per client
-    # with the full transcripts of their sales meetings, in this Drive folder.
+    # --- won / lost leads → Drive transcript doc ---
+    # When an opportunity in pipeline "ליד ראשי" reaches "ליד נסגר" (won) or
+    # "לא רלוונטי" (lost), we build one Google Doc per lead with the full transcripts
+    # of its sales meetings, what the lead said they want solved, and the
+    # opportunity's "why" field — in the won or the lost Drive folder.
     closed_deals_enabled: bool = True
-    closed_deals_folder_id: str = "11nbJXDvPK-GuBVocN3opr2XHYSulOEri"
+    closed_deals_won_folder_id: str = "128vcH6e-M9SQD3gnvtHj9dmdwLi7AfrH"
+    closed_deals_lost_folder_id: str = "1EQcXEGFWgSnYMedwyk1jogMjn48yXN8v"
     # Which meetings count as "sales meetings". Matched as substrings of the Zoom
     # title, like ZOOM_TRANSCRIBE_MEETING_TYPES. Comma-separated.
     closed_deals_meeting_types: str = "פגישת הדגמה,פגישת התאמה,פגישת סיכום והתחלת עבודה"
-    # A deal is often closed on the very call that is still being transcribed, so
+    # A lead is often moved on the very call that is still being transcribed, so
     # we wait before the first write, then keep re-checking for late transcripts.
     closed_deals_initial_wait_minutes: int = 60
     closed_deals_window_hours: int = 24
     closed_deals_check_interval_seconds: int = 15 * 60
-    # The server finds closed deals itself by polling GHL (no workflow needed):
-    # opportunities in this pipeline/stage whose stage changed within the lookback.
-    # Names are matched as case-insensitive substrings.
+    # The server finds these leads itself by polling GHL (no workflow needed):
+    # opportunities in the pipeline/stage whose stage changed within the lookback.
     closed_deals_pipeline_name: str = "ליד ראשי"
     closed_deals_stage_name: str = "ליד נסגר"
+    closed_deals_lost_stage_name: str = "לא רלוונטי"
     closed_deals_poll_lookback_hours: int = 48
+    # Opportunity custom fields (by name) holding the reason.
+    closed_deals_won_reason_field: str = "למה הליד נסגר"
+    closed_deals_lost_reason_field: str = "למה הליד לא נסגר"
+    # Model for the "what does the lead want solved" extraction. Empty = the cheap
+    # call-summary model.
+    closed_deals_pain_model: str = ""
     # Guards the GHL webhook (GHL workflows can't sign requests, so the token rides
     # in the URL). Falls back to ADMIN_API_TOKEN when empty.
     deal_closed_webhook_token: str = ""

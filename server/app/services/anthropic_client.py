@@ -357,3 +357,45 @@ def transliterate_name(name: str) -> list[str]:
     if not isinstance(out, list):
         return []
     return [str(x).strip() for x in out if isinstance(x, str) and x.strip() and x.strip().lower() != name.strip().lower()]
+
+
+_PAIN_SYSTEM = """לפניך תמלול של פגישת מכירה אחת או יותר בין גד תמיר (More-Than — CRM ואוטומציות) לבין ליד.
+
+כמעט בכל פגישה גד שואל את הליד שאלה בסגנון: "מה הדברים העיקריים / הבעיות המרכזיות שתרצה שנפתור במהלך הפגישה, שאם יקרו תגיד לי 'בוא נתקדם'?". הניסוח משתנה מפגישה לפגישה — זהה את השאלה לפי המשמעות, לא לפי המילים.
+
+המשימה: להחזיר את התשובה של הליד לשאלה הזו — כלומר למה הוא פנה ומה הוא רוצה שייפתר.
+
+פורמט הפלט, בעברית בלבד:
+- שורה לכל בעיה/צורך, כל שורה מתחילה ב-"- ".
+- קצר וענייני, כמה שיותר במילים של הליד עצמו. בלי פרשנות, בלי המלצות, בלי כותרת ובלי הקדמה.
+- רק מה שהליד אמר בעצמו. אל תסיק ואל תמציא.
+
+אם השאלה לא נשאלה, או שהליד לא ענה עליה בפועל, החזר בדיוק את השורה:
+השאלה לא נשאלה בפגישה
+"""
+
+
+@retry(
+    reraise=True,
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type((APIConnectionError, RateLimitError, APIError)),
+)
+def extract_lead_goals(transcripts: str) -> str:
+    """What the lead said they want solved — the answer to Gad's opening question —
+    as short Hebrew bullet lines, or the fixed "not asked" line."""
+    settings = get_settings()
+    client = _get_client()
+    message = client.messages.create(
+        model=settings.closed_deals_pain_model or settings.anthropic_call_model or settings.anthropic_model,
+        max_tokens=800,
+        # Via extra_body: the pinned anthropic==0.42 SDK has no `thinking` kwarg.
+        extra_body={"thinking": {"type": "disabled"}},
+        system=[{"type": "text", "text": _PAIN_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": transcripts}],
+    )
+    text = "".join(b.text for b in message.content if hasattr(b, "text")).strip()
+    log.info("extract_lead_goals done", extra={
+        "in_tokens": message.usage.input_tokens, "out_tokens": message.usage.output_tokens,
+    })
+    return text

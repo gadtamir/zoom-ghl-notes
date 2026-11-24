@@ -161,15 +161,20 @@ class ClosedDealStatus(str, enum.Enum):
 
 
 class ClosedDeal(Base):
-    """A lead that reached "ליד נסגר" — we collect its sales-meeting transcripts into
-    one Google Doc. Kept open for a window after closing because the deal is often
-    closed on the very call that hasn't been transcribed yet."""
+    """A lead that left the sales pipeline — won ("ליד נסגר") or lost ("לא רלוונטי").
+    We collect its sales-meeting transcripts into one Google Doc, in the won or the
+    lost Drive folder. Kept open for a window after the stage change because the
+    lead is often moved on the very call that hasn't been transcribed yet.
 
-    __tablename__ = "closed_deals"
+    Table is `lead_docs` (not the short-lived `closed_deals`): columns were added
+    and `create_all` can't alter an existing table."""
+
+    __tablename__ = "lead_docs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     ghl_contact_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     ghl_opportunity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(10), default="won", nullable=False, index=True)  # won | lost
     contact_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     closed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     status: Mapped[ClosedDealStatus] = mapped_column(
@@ -181,8 +186,14 @@ class ClosedDeal(Base):
     gdoc_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     gdoc_link: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # JSON list of "zoom:<id>" / "job:<id>" keys already written to the doc, so a
-    # re-check only rewrites the doc when a new transcript actually showed up.
+    # re-check only rewrites the doc when something actually changed.
     included_keys: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The opportunity's "why it closed / didn't close" field, as last written.
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # What the lead said they want solved (extracted from the transcripts by
+    # Claude), and the transcript keys that extraction covered.
+    pain_points: Mapped[str | None] = mapped_column(Text, nullable=True)
+    pain_keys: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

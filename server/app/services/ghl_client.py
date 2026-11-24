@@ -146,6 +146,36 @@ class GHLClient:
         wait=wait_exponential(multiplier=2, min=2, max=20),
         retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
     )
+    def get_opportunity(self, opportunity_id: str) -> dict[str, Any] | None:
+        r = self._client.get(f"/opportunities/{opportunity_id}")
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise GHLError(f"get_opportunity {r.status_code}: {r.text[:200]}")
+        data = r.json()
+        return data.get("opportunity", data)
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
+    def opportunity_custom_fields(self) -> list[dict[str, Any]]:
+        """Custom-field definitions of the opportunity object (id, name, ...)."""
+        r = self._client.get(
+            f"/locations/{self._location_id}/customFields", params={"model": "opportunity"}
+        )
+        if r.status_code != 200:
+            raise GHLError(f"opportunity_custom_fields {r.status_code}: {r.text[:200]}")
+        return r.json().get("customFields", [])
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=2, min=2, max=20),
+        retry=retry_if_exception_type((httpx.HTTPError, GHLError)),
+    )
     def list_pipelines(self) -> list[dict[str, Any]]:
         """All opportunity pipelines (each carries its `stages` list inline)."""
         r = self._client.get(

@@ -208,6 +208,8 @@ def _deal_row(d) -> dict:
         "id": d.id,
         "contact_id": d.ghl_contact_id,
         "name": d.contact_name,
+        "outcome": d.outcome,
+        "reason": d.reason,
         "closed_at": d.closed_at.isoformat() if d.closed_at else None,
         "status": _status_value(d.status),
         "doc": d.gdoc_link,
@@ -218,7 +220,7 @@ def _deal_row(d) -> dict:
 
 @router.get("/deals")
 def deals_list(token: str | None = Query(default=None), limit: int = 50) -> JSONResponse:
-    """Closed deals and their transcript docs, newest first."""
+    """Won/lost leads and their transcript docs, newest first."""
     _auth(token)
     from ..models import ClosedDeal
     db = SessionLocal()
@@ -249,15 +251,18 @@ def deals_preview(token: str | None = Query(default=None), contact_id: str = Que
 
 @router.post("/deals/run")
 def deals_run(token: str | None = Query(default=None), contact_id: str = Query(...),
-              name: str | None = Query(default=None)) -> JSONResponse:
+              name: str | None = Query(default=None),
+              outcome: str = Query(default="won", pattern="^(won|lost)$"),
+              opportunity_id: str | None = Query(default=None)) -> JSONResponse:
     """Build (or refresh) a contact's transcript doc now, without waiting — for
-    deals that closed before this existed, or to test the setup."""
+    leads that were moved before this existed, or to test the setup. Pass
+    `opportunity_id` to include the opportunity's reason field."""
     _auth(token)
     from ..tasks.closed_deals import process_deal, register_deal
     db = SessionLocal()
     try:
-        deal, _ = register_deal(db, contact_id, name, None)
-        outcome = process_deal(db, deal, force=True)
-        return JSONResponse({"outcome": outcome, **_deal_row(deal)})
+        deal, _ = register_deal(db, contact_id, name, opportunity_id, outcome=outcome)
+        result = process_deal(db, deal, force=True)
+        return JSONResponse({"result": result, **_deal_row(deal)})
     finally:
         db.close()
