@@ -74,6 +74,8 @@ class Settings(BaseSettings):
     # 0 (or negative) disables auto-deletion entirely.
     zoom_recording_retention_days: int = 30
     zoom_cleanup_interval_seconds: int = 24 * 60 * 60  # sweep once a day
+    # How far back (in 30-day windows) the sweep looks for recordings to delete.
+    zoom_cleanup_sweep_months: int = 12
 
     # --- spec-builder (אפיון + פרומפט בוט) ---
     # Kill switch: set to false to disable spec/bot generation (auto + manual)

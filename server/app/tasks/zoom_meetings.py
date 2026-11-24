@@ -798,13 +798,16 @@ def poll_recordings() -> dict:
 
 @celery_app.task(name="zoom_meetings.cleanup_recordings")
 def cleanup_recordings() -> dict:
-    """Delete Zoom cloud recordings we've finished with, after a retention window.
+    """Delete every Zoom cloud recording older than the retention window.
+
+    Sweeps the whole account by recording age rather than only the meetings we
+    processed: recordings that failed, were never picked up, or predate the
+    pipeline would otherwise pile up until the storage cap is hit. Nothing that
+    old is still retried (the poller only looks back `zoom_poll_lookback_hours`).
 
     Not deleted on completion: the team may want to keep a recording (a closed
-    deal, say), so there's a grace period to save it first. Only finished meetings
-    are eligible — a `failed` one might still be retried, so its recording stays.
-    `recording_deleted` makes this idempotent, and the delete lands in Zoom's own
-    trash (~30 days recoverable) rather than being destroyed outright.
+    deal, say), so there's a grace period to save it first. The delete lands in
+    Zoom's own trash (~30 days recoverable) rather than being destroyed outright.
     """
     settings = get_settings()
     days = settings.zoom_recording_retention_days
@@ -813,39 +816,45 @@ def cleanup_recordings() -> dict:
     if not (settings.zoom_account_id and settings.zoom_client_id and settings.zoom_client_secret):
         return {"status": "no_credentials"}
 
+    from ..services.zoom_client import ZoomClient
+
     cutoff = datetime.utcnow() - timedelta(days=days)
     db = SessionLocal()
     deleted = failed = 0
+    seen: set[str] = set()
     try:
-        stale = (
-            db.query(ZoomMeeting)
-            .filter(
-                ZoomMeeting.recording_deleted.is_(False),
-                ZoomMeeting.status.in_((ZoomMeetingStatus.completed, ZoomMeetingStatus.skipped)),
-                ZoomMeeting.completed_at.isnot(None),
-                ZoomMeeting.completed_at < cutoff,
-            )
-            .all()
-        )
-        if not stale:
-            return {"status": "ok", "deleted": 0}
-
-        from ..services.zoom_client import ZoomClient
-
         with ZoomClient() as zoom:
-            for zm in stale:
+            # Zoom caps one listing at a month, so walk back window by window.
+            for i in range(max(1, settings.zoom_cleanup_sweep_months)):
+                until = cutoff - timedelta(days=30 * i)
                 try:
-                    zoom.delete_recording(zm.zoom_meeting_uuid)
-                    zm.recording_deleted = True
-                    db.commit()
-                    deleted += 1
-                except Exception as exc:  # noqa: BLE001 — one bad delete mustn't stop the sweep
-                    db.rollback()
+                    meetings = zoom.list_recordings(since=until - timedelta(days=30), until=until)
+                except Exception as exc:  # noqa: BLE001 — a bad window mustn't stop the sweep
                     failed += 1
-                    log.warning(
-                        "recording cleanup failed for one meeting",
-                        extra={"meeting": zm.zoom_meeting_uuid, "error": str(exc)[:200]},
-                    )
+                    log.warning("recording cleanup: listing failed", extra={"error": str(exc)[:200]})
+                    continue
+                for m in meetings:
+                    uuid = m.get("uuid")
+                    started = _parse_zoom_time(m.get("start_time"))
+                    # `to` is a whole day, so the newest window can include
+                    # recordings still inside the retention period.
+                    if not uuid or uuid in seen or started is None or started >= cutoff:
+                        continue
+                    seen.add(uuid)
+                    try:
+                        zoom.delete_recording(uuid)
+                        db.query(ZoomMeeting).filter(ZoomMeeting.zoom_meeting_uuid == uuid).update(
+                            {ZoomMeeting.recording_deleted: True}
+                        )
+                        db.commit()
+                        deleted += 1
+                    except Exception as exc:  # noqa: BLE001 — one bad delete mustn't stop the sweep
+                        db.rollback()
+                        failed += 1
+                        log.warning(
+                            "recording cleanup failed for one meeting",
+                            extra={"meeting": uuid, "error": str(exc)[:200]},
+                        )
         log.info("zoom recording cleanup done", extra={"deleted": deleted, "failed": failed, "retention_days": days})
         return {"status": "ok", "deleted": deleted, "failed": failed}
     finally:
