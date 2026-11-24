@@ -1,4 +1,5 @@
 from celery import Celery
+from celery.schedules import crontab
 
 from ..config import get_settings
 from ..logging_config import configure_logging
@@ -48,10 +49,12 @@ celery_app.conf.update(
             "task": "zoom_meetings.cleanup_recordings",
             "schedule": settings.zoom_cleanup_interval_seconds,
         },
-        # Closed deals: build/refresh each client's sales-transcript doc in Drive.
+        # Won/lost leads: build/refresh each lead's sales-transcript doc in Drive, daily.
         "check-closed-deals": {
             "task": "closed_deals.check",
-            "schedule": settings.closed_deals_check_interval_seconds,
+            # Fixed time of day, not an interval: an interval timer restarts on
+            # every deploy, so a daily one might never fire.
+            "schedule": crontab(hour=settings.closed_deals_check_hour_utc, minute=7),
         },
     },
 )
