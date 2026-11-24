@@ -1,8 +1,8 @@
-"""GHL workflow webhook — "lead closed" → collect sales-meeting transcripts to Drive.
+"""GHL workflow webhook — lead won/lost → collect sales-meeting transcripts to Drive.
 
-Set up in GHL as a workflow: trigger "Pipeline Stage Changed" (pipeline "ליד ראשי",
-stage "ליד נסגר") → action "Webhook" POST to
-    https://zoom-ghl-server.onrender.com/webhooks/ghl/deal-closed?token=<token>
+Optional: the server already finds these leads by polling GHL. To push instead, a
+workflow with trigger "Pipeline Stage Changed" → action "Webhook" POST to
+    https://zoom-ghl-server.onrender.com/webhooks/ghl/deal-closed?token=<token>&outcome=won|lost
 
 GHL workflows can't sign requests, so a shared token in the URL guards the endpoint
 (DEAL_CLOSED_WEBHOOK_TOKEN, falling back to ADMIN_API_TOKEN). The handler only
@@ -32,7 +32,11 @@ def _first(d: dict, *keys: str) -> str | None:
 
 
 @router.post("/deal-closed")
-async def deal_closed(request: Request, token: str | None = Query(default=None)) -> dict:
+async def deal_closed(
+    request: Request,
+    token: str | None = Query(default=None),
+    outcome: str = Query(default="won", pattern="^(won|lost)$"),
+) -> dict:
     s = get_settings()
     expected = s.deal_closed_webhook_token or s.admin_api_token
     if not expected:
@@ -65,7 +69,7 @@ async def deal_closed(request: Request, token: str | None = Query(default=None))
 
     db = SessionLocal()
     try:
-        deal, created = register_deal(db, contact_id, name, opportunity_id)
+        deal, created = register_deal(db, contact_id, name, opportunity_id, outcome=outcome)
         return {"status": "registered" if created else "duplicate", "deal_id": deal.id}
     finally:
         db.close()

@@ -1,14 +1,19 @@
-"""Closed deals → one Google Doc of sales-meeting transcripts per client.
+"""Won / lost leads → one Google Doc of sales-meeting transcripts per lead.
 
 Flow:
-  1. `closed_deals.check` polls GHL for opportunities that moved into "ליד נסגר"
-     (pipeline "ליד ראשי") within the lookback and records a `ClosedDeal` for each.
-     (A GHL workflow can also POST to /webhooks/ghl/deal-closed — optional.)
-  2. The same task (Celery beat, every 15 min) walks the pending deals.
-     Nothing is written for the first hour after closing — the deal is often closed
-     on the call that is still being transcribed. After that the doc is created as
-     soon as no matching meeting is still mid-pipeline, and rewritten whenever a new
-     transcript shows up, until the window (24h) ends.
+  1. `closed_deals.check` (Celery beat, every 15 min) polls GHL for opportunities in
+     pipeline "ליד ראשי" that moved into "ליד נסגר" (won) or "לא רלוונטי" (lost)
+     within the lookback, and records a `ClosedDeal` for each one that has a sales
+     meeting on record. (A GHL workflow can also POST to /webhooks/ghl/deal-closed.)
+  2. The same task walks the pending deals. Nothing is written for the first hour
+     after the stage change — the lead is often moved on the call that is still
+     being transcribed. After that the doc is created as soon as no matching meeting
+     is still mid-pipeline, and rewritten whenever a transcript or the reason field
+     changes, until the window (24h) ends.
+
+Each doc holds: what the lead said they want solved (extracted by Claude from the
+transcripts), the opportunity's "why it closed / didn't close" field, and the full
+transcripts. Won docs and lost docs go to separate Drive folders.
 
 Sources: Zoom cloud recordings (`ZoomMeeting`) and desktop-uploader jobs (`Job`),
 both already matched to a GHL contact by the transcription pipeline. Only titles
@@ -42,14 +47,53 @@ log = logging.getLogger(__name__)
 
 _IL = ZoneInfo("Asia/Jerusalem")
 
-# A webhook fired twice for the same close (workflow re-entry, manual re-run) must
-# not produce a second doc — reuse a deal for the same contact this recent.
+WON, LOST = "won", "lost"
+
+# A lead registered twice for the same outcome (poll overlap, workflow re-entry,
+# manual re-run) must not produce a second doc.
 _DEDUPE_WINDOW = timedelta(days=7)
 
-# Zoom meetings in these states will never get a transcript, so they don't hold
-# the doc back.
+# Meetings in these states will never get a transcript, so they don't hold the
+# doc back.
 _ZOOM_DEAD = {ZoomMeetingStatus.skipped, ZoomMeetingStatus.failed}
 _JOB_DEAD = {JobStatus.failed, JobStatus.unmatched}
+
+# Page cap per stage per poll (100 opportunities a page). "לא רלוונטי" is a big
+# stage; if the cap is ever hit we log it rather than loop for minutes.
+_MAX_PAGES = 50
+
+# Claude's context is large but not infinite; several long meetings fit well
+# under this.
+_PAIN_MAX_CHARS = 400_000
+PAIN_NOT_ASKED = "השאלה לא נשאלה בפגישה"
+
+
+@dataclass(frozen=True)
+class _Outcome:
+    key: str
+    label: str            # heading of the reason section
+    status_line: str      # "נסגר" / "לא נסגר"
+
+    @property
+    def stage_name(self) -> str:
+        s = get_settings()
+        return s.closed_deals_stage_name if self.key == WON else s.closed_deals_lost_stage_name
+
+    @property
+    def folder_id(self) -> str:
+        s = get_settings()
+        return s.closed_deals_won_folder_id if self.key == WON else s.closed_deals_lost_folder_id
+
+    @property
+    def reason_field(self) -> str:
+        s = get_settings()
+        return s.closed_deals_won_reason_field if self.key == WON else s.closed_deals_lost_reason_field
+
+
+OUTCOMES = {
+    WON: _Outcome(WON, "למה הליד נסגר", "נסגר"),
+    LOST: _Outcome(LOST, "למה הליד לא נסגר", "לא נסגר (לא רלוונטי)"),
+}
 
 
 def _meeting_types() -> list[str]:
@@ -96,7 +140,7 @@ def collect_meetings(db: Session, contact_id: str) -> list[_Meeting]:
     out: list[_Meeting] = []
     for zm in db.query(ZoomMeeting).filter(ZoomMeeting.ghl_contact_id == contact_id).all():
         kind = sales_meeting_type(zm.topic)
-        if not kind or zm.status in _ZOOM_DEAD and not zm.transcript:
+        if not kind or (zm.status in _ZOOM_DEAD and not zm.transcript):
             continue
         out.append(_Meeting(
             key=f"zoom:{zm.id}", kind=kind, started_at=_il(zm.started_at),
@@ -105,7 +149,7 @@ def collect_meetings(db: Session, contact_id: str) -> list[_Meeting]:
         ))
     for job in db.query(Job).filter(Job.ghl_contact_id == contact_id).all():
         kind = sales_meeting_type(job.meeting_topic or job.original_filename)
-        if not kind or job.status in _JOB_DEAD and not job.transcript:
+        if not kind or (job.status in _JOB_DEAD and not job.transcript):
             continue
         out.append(_Meeting(
             key=f"job:{job.id}", kind=kind, started_at=_job_date(job),
@@ -116,23 +160,53 @@ def collect_meetings(db: Session, contact_id: str) -> list[_Meeting]:
     return out
 
 
+# --- rendering -----------------------------------------------------------------
+
+_P = '<p dir="rtl" style="text-align:right">'
+_H2 = '<h2 dir="rtl" style="text-align:right">'
+
+
 def _paragraphs(text: str) -> str:
     parts = [p.strip() for p in re.split(r"\n\s*\n|\n", text) if p.strip()]
-    return "\n".join(f'<p dir="rtl" style="text-align:right">{html.escape(p)}</p>' for p in parts)
+    return "\n".join(f"{_P}{html.escape(p)}</p>" for p in parts)
 
 
-def render_doc(name: str, closed_at_il: datetime, meetings: list[_Meeting]) -> str:
+def _bullets(text: str) -> str:
+    """Lines starting with '-' become a list; anything else stays a paragraph."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    items = [re.sub(r"^[-•*]\s*", "", ln) for ln in lines if re.match(r"^[-•*]\s*", ln)]
+    if items and len(items) == len(lines):
+        lis = "".join(f'<li dir="rtl" style="text-align:right">{html.escape(i)}</li>' for i in items)
+        return f'<ul dir="rtl">{lis}</ul>'
+    return _paragraphs(text)
+
+
+def _meeting_heading(m: _Meeting) -> str:
+    when = "תאריך לא ידוע"
+    if m.started_at:
+        when = f"{m.started_at:%d/%m/%Y}" if m.key.startswith("job:") else f"{m.started_at:%d/%m/%Y %H:%M}"
+    dur = f" · {m.duration_minutes} דק'" if m.duration_minutes else ""
+    return f"{m.kind} — {when}{dur}"
+
+
+def render_doc(
+    name: str,
+    outcome: _Outcome,
+    closed_at_il: datetime,
+    meetings: list[_Meeting],
+    pain_points: str | None,
+    reason: str | None,
+) -> str:
     blocks = [
-        f'<h1 dir="rtl" style="text-align:right">{html.escape(name)} — תמלולי פגישות מכירה</h1>',
-        f'<p dir="rtl" style="text-align:right">נסגר בתאריך {closed_at_il:%d/%m/%Y} · '
-        f'{len(meetings)} פגישות</p>',
+        f'<h1 dir="rtl" style="text-align:right">{html.escape(name)}</h1>',
+        f"{_P}<b>סטטוס:</b> {outcome.status_line} · {closed_at_il:%d/%m/%Y} · {len(meetings)} פגישות</p>",
+        f"{_H2}למה הוא פנה אלינו</h2>",
+        _bullets(pain_points) if pain_points else f"{_P}לא זמין</p>",
+        f"{_H2}{outcome.label}</h2>",
+        _paragraphs(reason) if reason else f"{_P}השדה לא מולא ב-GHL</p>",
     ]
     for m in meetings:
-        when = f"{m.started_at:%d/%m/%Y %H:%M}" if m.started_at else "תאריך לא ידוע"
-        if m.key.startswith("job:") and m.started_at:
-            when = f"{m.started_at:%d/%m/%Y}"
-        dur = f" · {m.duration_minutes} דק'" if m.duration_minutes else ""
-        blocks.append(f'<h2 dir="rtl" style="text-align:right">{html.escape(m.kind)} — {when}{dur}</h2>')
+        blocks.append(f"{_H2}תמלול: {html.escape(_meeting_heading(m))}</h2>")
         blocks.append(_paragraphs(m.transcript or ""))
     return (
         '<html><head><meta charset="utf-8"></head><body dir="rtl">'
@@ -141,33 +215,47 @@ def render_doc(name: str, closed_at_il: datetime, meetings: list[_Meeting]) -> s
     )
 
 
+# --- registering ---------------------------------------------------------------
+
 def register_deal(
     db: Session,
     contact_id: str,
     name: str | None,
     opportunity_id: str | None,
     closed_at: datetime | None = None,
+    outcome: str = WON,
 ) -> tuple[ClosedDeal, bool]:
-    """Record a closed deal. Returns (deal, created). Idempotent per contact within
-    the dedupe window."""
+    """Record a won/lost lead. Returns (deal, created). Idempotent per contact and
+    outcome within the dedupe window."""
     since = datetime.utcnow() - _DEDUPE_WINDOW
     existing = (
         db.query(ClosedDeal)
-        .filter(ClosedDeal.ghl_contact_id == contact_id, ClosedDeal.closed_at >= since)
+        .filter(
+            ClosedDeal.ghl_contact_id == contact_id,
+            ClosedDeal.outcome == outcome,
+            ClosedDeal.closed_at >= since,
+        )
         .order_by(ClosedDeal.closed_at.desc())
         .first()
     )
     if existing:
+        if opportunity_id and not existing.ghl_opportunity_id:
+            existing.ghl_opportunity_id = opportunity_id
+            db.commit()
         return existing, False
-    deal = ClosedDeal(ghl_contact_id=contact_id, contact_name=name, ghl_opportunity_id=opportunity_id)
+    deal = ClosedDeal(
+        ghl_contact_id=contact_id, contact_name=name, ghl_opportunity_id=opportunity_id, outcome=outcome,
+    )
     if closed_at:
         deal.closed_at = closed_at
     db.add(deal)
     db.commit()
     db.refresh(deal)
-    log.info("closed deal registered", extra={"deal": deal.id, "contact": contact_id})
+    log.info("lead doc registered", extra={"deal": deal.id, "contact": contact_id, "outcome": outcome})
     return deal, True
 
+
+# --- GHL lookups ---------------------------------------------------------------
 
 def _resolve_name(deal: ClosedDeal) -> str:
     if deal.contact_name:
@@ -183,9 +271,62 @@ def _resolve_name(deal: ClosedDeal) -> str:
             deal.contact_name = name
             return name
     except Exception as exc:  # name is cosmetic — never block the doc on it
-        log.warning("closed deal: contact name lookup failed", extra={"deal": deal.id, "error": str(exc)})
+        log.warning("lead doc: contact name lookup failed", extra={"deal": deal.id, "error": str(exc)})
     return deal.ghl_contact_id
 
+
+def _field_value(cf: dict) -> str | None:
+    """A custom field's value as text. GHL names the key differently per field
+    type and endpoint, so try them all."""
+    for key in ("fieldValue", "fieldValueString", "fieldValueLargeText", "value", "fieldValueArray"):
+        v = cf.get(key)
+        if isinstance(v, (list, tuple)):
+            v = ", ".join(str(x) for x in v if x)
+        if v not in (None, ""):
+            return str(v).strip() or None
+    return None
+
+
+def fetch_reason(deal: ClosedDeal) -> str | None:
+    """The opportunity's reason field for this outcome. Raises on API failure so
+    the caller can keep the previous value instead of blanking it."""
+    if not deal.ghl_opportunity_id:
+        return None
+    from ..services.ghl_client import GHLClient
+
+    want = OUTCOMES[deal.outcome].reason_field.strip()
+    with GHLClient() as ghl:
+        field_id = next(
+            (f.get("id") for f in ghl.opportunity_custom_fields() if (f.get("name") or "").strip() == want),
+            None,
+        )
+        if not field_id:
+            log.warning("lead doc: opportunity field not found", extra={"field": want})
+            return None
+        opp = ghl.get_opportunity(deal.ghl_opportunity_id) or {}
+    for cf in opp.get("customFields") or []:
+        if cf.get("id") == field_id:
+            return _field_value(cf)
+    return None
+
+
+def _pain_points(deal: ClosedDeal, ready: list[_Meeting], ready_keys: set[str]) -> str | None:
+    """What the lead wants solved, re-extracted only when the transcripts changed.
+    A failed extraction keeps the previous text and is retried on the next check."""
+    if deal.pain_points and set(json.loads(deal.pain_keys or "[]")) == ready_keys:
+        return deal.pain_points
+    try:
+        from ..services.anthropic_client import extract_lead_goals
+
+        text = "\n\n".join(f"=== {_meeting_heading(m)} ===\n{m.transcript}" for m in ready)
+        deal.pain_points = extract_lead_goals(text[:_PAIN_MAX_CHARS]) or PAIN_NOT_ASKED
+        deal.pain_keys = json.dumps(sorted(ready_keys))
+    except Exception as exc:
+        log.warning("lead doc: goal extraction failed", extra={"deal": deal.id, "error": str(exc)})
+    return deal.pain_points
+
+
+# --- processing ----------------------------------------------------------------
 
 def process_deal(db: Session, deal: ClosedDeal, now: datetime | None = None, force: bool = False) -> str:
     """Advance one pending deal. Returns a short outcome string for logs/admin.
@@ -205,36 +346,57 @@ def process_deal(db: Session, deal: ClosedDeal, now: datetime | None = None, for
     included = set(json.loads(deal.included_keys or "[]"))
     ready_keys = {m.key for m in ready}
 
-    outcome = "unchanged"
+    result = "unchanged"
     hold = busy and now < deadline and not force
-    if ready and ready_keys != included and not hold:
-        name = _resolve_name(deal)
-        doc_html = render_doc(name, _il(deal.closed_at), ready)
-        title = f"{name} - תמלולי מכירה - {_il(deal.closed_at):%d.%m.%Y}"
-        from ..services.gdrive_client import upsert_html_gdoc
+    if hold:
+        result = "waiting_transcripts"
+    elif ready:
+        try:
+            reason = fetch_reason(deal)
+        except Exception as exc:
+            reason = deal.reason
+            log.warning("lead doc: reason lookup failed", extra={"deal": deal.id, "error": str(exc)})
+        pain_before = deal.pain_points
+        pain = _pain_points(deal, ready, ready_keys)
+        # Persist the extraction now: if the Drive write below fails, the retry
+        # must not pay for the same Claude call again.
+        db.commit()
 
-        f = upsert_html_gdoc(title, doc_html, s.closed_deals_folder_id, file_id=deal.gdoc_id)
-        deal.gdoc_id = f["id"]
-        deal.gdoc_link = f.get("webViewLink") or deal.gdoc_link
-        deal.included_keys = json.dumps(sorted(ready_keys))
-        outcome = "doc_updated" if included else "doc_created"
-        log.info("closed deal doc written", extra={
-            "deal": deal.id, "meetings": len(ready), "doc": deal.gdoc_id, "outcome": outcome,
-        })
-    elif hold:
-        outcome = "waiting_transcripts"
+        if ready_keys != included or reason != deal.reason or pain != pain_before or not deal.gdoc_id:
+            outcome = OUTCOMES[deal.outcome]
+            name = _resolve_name(deal)
+            closed_il = _il(deal.closed_at)
+            from ..services.gdrive_client import upsert_html_gdoc
 
-    if now >= deadline and not busy or now >= deadline + timedelta(hours=s.closed_deals_window_hours):
+            f = upsert_html_gdoc(
+                f"{name} - {closed_il:%d.%m.%Y}",
+                render_doc(name, outcome, closed_il, ready, pain, reason),
+                outcome.folder_id,
+                file_id=deal.gdoc_id,
+            )
+            result = "doc_updated" if deal.gdoc_id else "doc_created"
+            deal.gdoc_id = f["id"]
+            deal.gdoc_link = f.get("webViewLink") or deal.gdoc_link
+            deal.included_keys = json.dumps(sorted(ready_keys))
+            deal.reason = reason
+            log.info("lead doc written", extra={
+                "deal": deal.id, "outcome": deal.outcome, "meetings": len(ready),
+                "doc": deal.gdoc_id, "result": result,
+            })
+
+    if (now >= deadline and not busy) or now >= deadline + timedelta(hours=s.closed_deals_window_hours):
         # Past the window (or far past it, if a meeting is stuck mid-pipeline).
         deal.status = ClosedDealStatus.done if deal.gdoc_id else ClosedDealStatus.no_meetings
         deal.completed_at = now
-        outcome = f"{outcome}+{deal.status.value}"
+        result = f"{result}+{deal.status.value}"
 
     deal.error_message = None
     deal.updated_at = now
     db.commit()
-    return outcome
+    return result
 
+
+# --- discovery -----------------------------------------------------------------
 
 def _parse_ghl_time(value) -> datetime | None:
     """GHL timestamps → naive UTC. Accepts ISO strings or epoch millis."""
@@ -249,26 +411,39 @@ def _parse_ghl_time(value) -> datetime | None:
         return None
 
 
-def _resolve_stage(ghl) -> tuple[str, str] | None:
-    """(pipeline_id, stage_id) for the configured closed stage, by name."""
+def _resolve_stages(ghl) -> tuple[str, dict[str, str]] | None:
+    """(pipeline_id, {outcome: stage_id}) by name. Exact stage-name match wins;
+    otherwise a case-insensitive substring match (stage names carry emojis)."""
     s = get_settings()
     want_p = s.closed_deals_pipeline_name.strip().lower()
-    want_s = s.closed_deals_stage_name.strip().lower()
     for p in ghl.list_pipelines():
         if want_p not in (p.get("name") or "").lower():
             continue
-        for st in p.get("stages", []):
-            if want_s in (st.get("name") or "").lower():
-                return p["id"], st["id"]
-    log.error("closed deals: pipeline/stage not found", extra={
-        "pipeline": s.closed_deals_pipeline_name, "stage": s.closed_deals_stage_name,
-    })
+        stages = p.get("stages", [])
+        found: dict[str, str] = {}
+        for o in OUTCOMES.values():
+            want = o.stage_name.strip().lower()
+            if not want:
+                continue
+            names = [((st.get("name") or "").strip().lower(), st.get("id")) for st in stages]
+            match = next((i for n, i in names if n == want), None) or next((i for n, i in names if want in n), None)
+            if match:
+                found[o.key] = match
+            else:
+                log.error("lead docs: stage not found", extra={"stage": o.stage_name})
+        return p["id"], found
+    log.error("lead docs: pipeline not found", extra={"pipeline": s.closed_deals_pipeline_name})
     return None
 
 
 def discover_closed_deals(db: Session, now: datetime | None = None) -> int:
-    """Register every opportunity that moved into the closed stage within the
-    lookback window. Returns how many new deals were registered."""
+    """Register every opportunity that moved into the won or lost stage within the
+    lookback window and has a sales meeting on record. Returns the number of new
+    registrations.
+
+    The meeting check keeps "לא רלוונטי" (mostly leads who never had a meeting)
+    from flooding the table; a meeting that lands later is picked up by a later
+    poll, as long as it is inside the lookback."""
     from ..services.ghl_client import GHLClient
 
     s = get_settings()
@@ -276,34 +451,38 @@ def discover_closed_deals(db: Session, now: datetime | None = None) -> int:
     since = now - timedelta(hours=s.closed_deals_poll_lookback_hours)
     new = 0
     with GHLClient() as ghl:
-        ids = _resolve_stage(ghl)
-        if not ids:
+        resolved = _resolve_stages(ghl)
+        if not resolved:
             return 0
-        pipeline_id, stage_id = ids
-        start_after = start_after_id = None
-        for _ in range(20):  # hard page cap — the stage is small; never loop forever
-            page = ghl.opportunities_page(
-                pipeline_id=pipeline_id, limit=100, pipeline_stage_id=stage_id,
-                start_after=start_after, start_after_id=start_after_id,
-            )
-            opps = page.get("opportunities", [])
-            for o in opps:
-                if o.get("pipelineStageId") and o.get("pipelineStageId") != stage_id:
-                    continue
-                changed = _parse_ghl_time(o.get("lastStageChangeAt") or o.get("updatedAt"))
-                contact_id = o.get("contactId")
-                if not contact_id or not changed or changed < since:
-                    continue
-                contact = o.get("contact") or {}
-                _, created = register_deal(
-                    db, contact_id, contact.get("name") or None, o.get("id"),
-                    closed_at=min(changed, now),
+        pipeline_id, stage_ids = resolved
+        for outcome, stage_id in stage_ids.items():
+            start_after = start_after_id = None
+            for page_no in range(_MAX_PAGES):
+                page = ghl.opportunities_page(
+                    pipeline_id=pipeline_id, limit=100, pipeline_stage_id=stage_id,
+                    start_after=start_after, start_after_id=start_after_id,
                 )
-                new += created
-            meta = page.get("meta") or {}
-            if not opps or not meta.get("nextPage"):
-                break
-            start_after, start_after_id = meta.get("startAfter"), meta.get("startAfterId")
+                opps = page.get("opportunities", [])
+                for o in opps:
+                    if o.get("pipelineStageId") and o.get("pipelineStageId") != stage_id:
+                        continue
+                    changed = _parse_ghl_time(o.get("lastStageChangeAt") or o.get("updatedAt"))
+                    contact_id = o.get("contactId")
+                    if not contact_id or not changed or changed < since:
+                        continue
+                    if not collect_meetings(db, contact_id):
+                        continue
+                    _, created = register_deal(
+                        db, contact_id, (o.get("contact") or {}).get("name") or None, o.get("id"),
+                        closed_at=min(changed, now), outcome=outcome,
+                    )
+                    new += created
+                meta = page.get("meta") or {}
+                if not opps or not meta.get("nextPage"):
+                    break
+                start_after, start_after_id = meta.get("startAfter"), meta.get("startAfterId")
+                if page_no == _MAX_PAGES - 1:
+                    log.warning("lead docs: page cap hit, stage not fully scanned", extra={"outcome": outcome})
     return new
 
 
@@ -320,7 +499,7 @@ def check_closed_deals() -> dict:
             discovered = discover_closed_deals(db)
         except Exception:
             db.rollback()
-            log.exception("closed deals: GHL discovery failed")
+            log.exception("lead docs: GHL discovery failed")
         pending = db.query(ClosedDeal).filter(ClosedDeal.status == ClosedDealStatus.pending).all()
         for deal in pending:
             try:
@@ -331,7 +510,7 @@ def check_closed_deals() -> dict:
                 deal.updated_at = datetime.utcnow()
                 db.commit()
                 results[deal.id] = "error"
-                log.exception("closed deal processing failed", extra={"deal": deal.id})
+                log.exception("lead doc processing failed", extra={"deal": deal.id})
         return {"discovered": discovered, "checked": len(pending), "results": results}
     finally:
         db.close()
